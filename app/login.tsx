@@ -9,9 +9,12 @@ import React, { useState } from 'react';
 import { View } from 'react-native';
 import * as z from 'zod/v4';
 
+const isDev = process.env.EXPO_PUBLIC_APP_ENV === 'development';
+const protocol = isDev ? 'http' : 'https';
+const healthPath = process.env.EXPO_PUBLIC_HEALTH_PATH ?? 'health';
+
 const normalizeUrl = (url: string): string => {
   if (!url) return url;
-  // Remove http:// or https:// if present
   return url.replace(/^https?:\/\//, '');
 };
 
@@ -26,7 +29,7 @@ const validateMedusaUrl = async (url: string): Promise<boolean> => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-    const response = await fetch(`https://${normalizedUrl}/health`, {
+    const response = await fetch(`${protocol}://${normalizedUrl}/${healthPath}`, {
       method: 'GET',
       signal: controller.signal,
       credentials: 'omit',
@@ -58,7 +61,7 @@ const loginSchema = z.object({
         if (!url) return false;
 
         try {
-          new URL(`https://${url}`);
+          new URL(`${protocol}://${url}`);
         } catch {
           console.error('Invalid URL format');
           return false;
@@ -83,7 +86,7 @@ export default function LoginScreen() {
 
   const handleLogin = async (data: LoginFormData) => {
     setError(null);
-    const fullUrl = `https://${data.medusaUrl}`;
+    const fullUrl = `${protocol}://${data.medusaUrl}`;
     try {
       await auth.login(fullUrl, data.email, data.password);
     } catch (err: any) {

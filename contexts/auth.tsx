@@ -124,6 +124,7 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
     }
 
     await SecureStore.deleteItemAsync('apiKey');
+    await SecureStore.deleteItemAsync('draft_order_id');
     setState({ status: 'unauthenticated' });
   }, [state.status]);
 
