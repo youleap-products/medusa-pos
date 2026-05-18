@@ -1,6 +1,6 @@
 import { useMedusaSdk } from '@/contexts/auth';
 import { useSettings } from '@/contexts/settings';
-import { showErrorToast } from '@/utils/errors';
+import { isFetchError, showErrorToast } from '@/utils/errors';
 import {
   AdminAddDraftOrderItems,
   AdminCustomer,
@@ -9,7 +9,7 @@ import {
   AdminUpdateDraftOrderItem,
 } from '@medusajs/types';
 import { useMutation, UseMutationOptions, useQuery, useQueryClient } from '@tanstack/react-query';
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from '@/utils/storage';
 import * as React from 'react';
 
 const DRAFT_ORDER_ID_STORAGE_KEY = 'draft_order_id';
@@ -85,7 +85,7 @@ export const useDraftOrderOrOrder = (draftOrderId: string) => {
       return sdk.admin.draftOrder
         .retrieve(draftOrderId, {
           fields:
-            '+tax_total,+discount_total,+subtotal,+total,+items.variant.options.*,+items.variant.options.option.*,+items.variant.inventory_quantity,+customer.*',
+            '+tax_total,+discount_total,+subtotal,+total,+items.variant.options.*,+items.variant.options.option.*,+items.variant.inventory_quantity,+items.adjustments.*,+customer.*',
         })
         .then((res) => res.draft_order)
         .catch(async () => {
@@ -114,7 +114,7 @@ export const useCurrentDraftOrder = () => {
 
       return sdk.admin.draftOrder.retrieve(draftOrderId, {
         fields:
-          '+tax_total,+discount_total,+subtotal,+total,+items.variant.options.*,+items.variant.options.option.*,+items.variant.inventory_quantity,+customer.*',
+          '+tax_total,+discount_total,+subtotal,+total,+items.variant.options.*,+items.variant.options.option.*,+items.variant.inventory_quantity,+items.adjustments.*,+customer.*',
       });
     },
   });
@@ -182,6 +182,11 @@ export const useAddToDraftOrder = (
       return options?.onSettled?.(...args);
     },
     onError: (error, variables, context) => {
+      if (isFetchError(error)) {
+        console.error('[addItems] FetchError status:', error.status, 'message:', error.message, error);
+      } else {
+        console.error('[addItems] error:', error);
+      }
       showErrorToast(error);
       return options?.onError?.(error, variables, context);
     },
@@ -523,9 +528,39 @@ export const useUpdateDraftOrderCustomer = (
   });
 };
 
+/**
+ * Tender shape accepted by the backend `/admin/orders/:id/pos-payments` route.
+ * Mirrors the local `Tender` type but drops the UI-only `id`.
+ */
+export interface CompleteDraftOrderTender {
+  method: 'cash' | 'card';
+  /** Amount in the order's smallest currency unit (agorot/cents). */
+  amount: number;
+  /** Caspit Uid for card tenders — used by the backend to record the external reference. */
+  caspit_uid?: string;
+  pan?: string;
+  cardName?: string;
+}
+
+export type CompleteDraftOrderInput = {
+  /**
+   * Tenders that settle the order. Empty array is rejected — every completion
+   * must carry at least one tender (a free order would still have a single
+   * zero-amount cash tender, recorded for audit).
+   */
+  tenders: CompleteDraftOrderTender[];
+  /**
+   * Shipping option to attach to the draft order before conversion. Optional —
+   * when omitted, we auto-pick the first option configured for the stock
+   * location. Pass it explicitly when the cashier picked a different option
+   * from the checkout screen.
+   */
+  shippingOptionId?: string;
+};
+
 export const useCompleteDraftOrder = (
   draftOrderId: string,
-  options?: Omit<UseMutationOptions<void, Error, void, unknown>, 'mutationKey' | 'mutationFn'>,
+  options?: Omit<UseMutationOptions<void, Error, CompleteDraftOrderInput, unknown>, 'mutationKey' | 'mutationFn'>,
 ) => {
   const sdk = useMedusaSdk();
   const queryClient = useQueryClient();
@@ -533,9 +568,12 @@ export const useCompleteDraftOrder = (
 
   return useMutation({
     mutationKey: ['draft-order', draftOrderId, 'complete'],
-    mutationFn: async () => {
+    mutationFn: async ({ tenders, shippingOptionId }: CompleteDraftOrderInput) => {
       if (!draftOrderId) {
         throw new Error('Draft order ID is required to complete the order');
+      }
+      if (!tenders || tenders.length === 0) {
+        throw new Error('At least one tender is required to complete the order');
       }
 
       const { draft_order } = await sdk.admin.draftOrder.retrieve(draftOrderId, {
@@ -549,7 +587,7 @@ export const useCompleteDraftOrder = (
           (address) => address.is_default_billing || address.id === draft_order.customer?.default_billing_address_id,
         ) || draft_order.customer?.addresses[0];
 
-      await sdk.admin.draftOrder.beginEdit(draftOrderId);
+      console.log('[completeOrder] step: update');
       await sdk.admin.draftOrder.update(draftOrderId, {
         billing_address: billingAddress
           ? {
@@ -578,13 +616,82 @@ export const useCompleteDraftOrder = (
             }
           : undefined,
       });
-      await sdk.admin.draftOrder.confirmEdit(draftOrderId);
 
-      await sdk.admin.draftOrder.convertToOrder(draftOrderId);
-      await sdk.client.fetch(`/admin/orders/${draftOrderId}/complete`, {
-        method: 'POST',
-      });
+      // Cancel any open edit session left from a previous failed attempt
+      try {
+        await sdk.admin.draftOrder.cancelEdit(draftOrderId);
+        console.log('[completeOrder] cancelEdit done (had open session)');
+      } catch {
+        // No open edit session — expected
+      }
+
+      console.log('[completeOrder] step: convertToOrder');
+      try {
+        await sdk.admin.draftOrder.convertToOrder(draftOrderId);
+        console.log('[completeOrder] convertToOrder done');
+      } catch (e: any) {
+        console.error('[completeOrder] convertToOrder failed', e?.status, JSON.stringify({ msg: e?.message, statusText: e?.statusText, type: e?.type, stack: e?.stack?.substring(0, 300) }));
+        throw e;
+      }
+
+      // Clear immediately after convert — if anything below throws, the ID must not
+      // remain in storage or the next addItems will 500 against a non-draft order.
       await SecureStore.deleteItemAsync(DRAFT_ORDER_ID_STORAGE_KEY);
+
+      // Record each tender via the custom POS payments route. The backend
+      // orchestrates createPaymentSessions + capturePayment per tender against
+      // the auto-created payment collection, matching the "one payment_collection
+      // with N sessions" model Medusa documents for split payments.
+      //
+      // TODO(backend): implement `POST /admin/orders/:id/pos-payments` on
+      // medusa-backend. Until that ships we fall back to markAsPaid against
+      // the auto-created collection so the order reaches `paid` status —
+      // otherwise Medusa blocks fulfillment on an unpaid order. We lose the
+      // per-tender breakdown in Medusa (still preserved on the printed
+      // receipt) but the order is at least usable end-to-end.
+      console.log('[completeOrder] step: pos-payments', tenders);
+      try {
+        await sdk.client.fetch(`/admin/orders/${draftOrderId}/pos-payments`, {
+          method: 'POST',
+          body: { tenders },
+        });
+        console.log('[completeOrder] pos-payments recorded');
+      } catch (e: any) {
+        if (e?.status === 404) {
+          console.warn('[completeOrder] pos-payments route 404 — falling back to markAsPaid');
+          const { order: converted } = await sdk.admin.order.retrieve(draftOrderId, {
+            fields: '+payment_collections.*',
+          });
+          const collectionId = converted.payment_collections?.[0]?.id;
+          if (collectionId) {
+            await sdk.admin.paymentCollection.markAsPaid(collectionId, { order_id: draftOrderId });
+            console.log('[completeOrder] markAsPaid fallback done');
+          } else {
+            console.warn('[completeOrder] no payment_collection on order — leaving unpaid');
+          }
+        } else {
+          console.error('[completeOrder] pos-payments failed status=', e?.status, 'message=', e?.message);
+          throw e;
+        }
+      }
+
+      // Stash the cashier's chosen shipping option in order metadata so
+      // `useFulfillOrder` can pass it to `createFulfillment.shipping_option_id`
+      // later — this lets fulfillment resolve a provider without us having to
+      // attach a shipping_method to the order itself. If the cashier skipped
+      // the picker, fulfillment will rely on Medusa's defaults / fail loudly.
+      if (shippingOptionId) {
+        try {
+          await sdk.admin.order.update(draftOrderId, {
+            metadata: { pos_shipping_option_id: shippingOptionId },
+          });
+          console.log('[completeOrder] pos_shipping_option_id saved', shippingOptionId);
+        } catch (e: any) {
+          console.warn('[completeOrder] failed to save pos_shipping_option_id', e?.message);
+        }
+      }
+
+      await sdk.admin.order.complete(draftOrderId, {});
     },
     ...options,
     onSettled: async (...args) => {

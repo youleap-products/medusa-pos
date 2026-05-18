@@ -29,6 +29,8 @@ module.exports = {
       },
       colors: {
         transparent: 'transparent',
+        canvas: '#0E1116',
+        panel: '#161A22',
         white: '#FFF',
         gray: {
           100: '#F1F1F1',

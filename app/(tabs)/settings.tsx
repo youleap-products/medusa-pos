@@ -1,4 +1,5 @@
 import { Antenna } from '@/components/icons/antenna';
+import { Settings } from '@/components/icons/settings';
 import { Button } from '@/components/ui/Button';
 import { LayoutWithScroll } from '@/components/ui/Layout';
 import { Prompt } from '@/components/ui/Prompt';
@@ -50,6 +51,16 @@ export default function SettingsScreen() {
           className="mb-8 justify-end"
         >
           {settings.data?.stock_location?.name || '—'}
+        </Button>
+        <Text className="mb-4 text-2xl">Hardware</Text>
+        <Button
+          onPress={() => router.push('/settings/hardware')}
+          variant="outline"
+          icon={<Settings size={16} />}
+          iconPosition="left"
+          className="mb-8 justify-end"
+        >
+          Printer & cash drawer
         </Button>
         <Text className="mb-4 text-2xl">Reset</Text>
         <Button

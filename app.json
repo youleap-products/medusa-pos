@@ -3,7 +3,7 @@
     "name": "agilo-pos",
     "slug": "agilo-pos",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "agilopos",
     "userInterfaceStyle": "light",
