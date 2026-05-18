@@ -1,4 +1,4 @@
-import { buildChargeXml, buildRefundXml, buildVoidXml, buildQueryXml } from '../providers/caspit/caspit.xml';
+import { buildChargeXml, buildRefundXml, buildVoidXml, buildQueryXml } from '../providers/caspit/caspit-xml';
 
 function tag(name: string, value: string) {
   return `<${name}>${value}</${name}>`;

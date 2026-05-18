@@ -60,20 +60,26 @@ describe('parseResponse — credit company errors (AshStatus)', () => {
     expect(result.errorCode).toBe('ASH_4');
   });
 
-  it('returns "Declined by credit company" for AshStatus=4', () => {
+  it('maps AshStatus=4 to the Hebrew card-declined message + card category', () => {
     const xml = buildResponse({ ResultCode: '0', Status: '0', AshStatus: '4' });
-    expect(parseResponse(xml).errorMessage).toBe('Declined by credit company');
+    const result = parseResponse(xml);
+    expect(result.errorMessage).toContain('הכרטיס נדחה');
+    expect(result.errorMessage).toContain('העסקה לא אושרה');
+    expect(result.errorCategory).toBe('card');
   });
 
-  it('returns specific message for AshStatus=443 (void already transmitted)', () => {
-    const xml = buildResponse({ ResultCode: '0', Status: '0', AshStatus: '443' });
-    expect(parseResponse(xml).errorMessage).toMatch(/already transmitted/);
+  it('maps AshStatus=705 to the user-cancelled message + user category', () => {
+    const xml = buildResponse({ ResultCode: '0', Status: '0', AshStatus: '705' });
+    const result = parseResponse(xml);
+    expect(result.errorMessage).toBe('המשתמש ביטל');
+    expect(result.errorCategory).toBe('user');
   });
 
-  it('returns generic credit company error for unknown AshStatus', () => {
+  it('falls back to a generic unknown message for codes missing from the table', () => {
     const xml = buildResponse({ ResultCode: '0', Status: '0', AshStatus: '99' });
-    expect(parseResponse(xml).errorMessage).toMatch(/Credit company error/);
-    expect(parseResponse(xml).errorMessage).toMatch(/99/);
+    const result = parseResponse(xml);
+    expect(result.errorMessage).toContain('99');
+    expect(result.errorCategory).toBe('unknown');
   });
 });
 

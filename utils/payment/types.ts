@@ -31,6 +31,12 @@ export interface PaymentResult {
   cardName?: string;      // e.g. "Visa Gold"
   errorCode?: string;
   errorMessage?: string;
+  /**
+   * High-level error category for UX routing. Drives toast color/icon and the
+   * follow-up prompt the cashier sees ("try another card", "retry", "call
+   * admin"). Only set when `success: false`.
+   */
+  errorCategory?: 'card' | 'limit' | 'comm' | 'data' | 'config' | 'device' | 'user' | 'unknown';
   rawResponse?: unknown;
 }
 

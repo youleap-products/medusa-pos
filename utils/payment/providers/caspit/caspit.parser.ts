@@ -1,4 +1,5 @@
 import type { PaymentResult } from '../../types';
+import { getAshStatusInfo, getUserFacingMessage } from './ash-status';
 
 /**
  * Extracts the inner text of the first matching XML tag (case-insensitive).
@@ -57,14 +58,20 @@ export function parseResponse(xml: string | null | undefined): PaymentResult {
 
     // AshStatus != 0 → credit company error (check AshStatus first)
     // AshStatus == 0 but ResultCode != 0 → Caspit-level error
-    const errorCode = ashStatus !== '0'
-      ? `ASH_${ashStatus}`
-      : `RC_${resultCode}`;
-
+    if (ashStatus && ashStatus !== '0') {
+      const info = getAshStatusInfo(ashStatus);
+      return {
+        success: false,
+        errorCode: `ASH_${ashStatus}`,
+        errorMessage: getUserFacingMessage(ashStatus) ?? info.msg,
+        errorCategory: info.category,
+        rawResponse: xml,
+      };
+    }
     return {
       success: false,
-      errorCode,
-      errorMessage: buildErrorMessage(resultCode, status, ashStatus),
+      errorCode: `RC_${resultCode}`,
+      errorMessage: buildResultCodeMessage(resultCode, status),
       rawResponse: xml,
     };
   } catch {
@@ -78,32 +85,17 @@ export function parseResponse(xml: string | null | undefined): PaymentResult {
 }
 
 /**
- * Maps known Caspit/Ashrait error codes to human-readable messages.
- * `AshStatus` errors (credit company) are checked first since they're the most
- * actionable for the cashier ("card declined" vs a terminal error).
+ * Maps Caspit-level `<ResultCode>` errors (terminal/Caspit side, distinct from
+ * credit-company errors which are handled by the AshStatus lookup table).
  *
  * Common codes:
- * - `AshStatus 4` — declined by issuer
- * - `AshStatus 443` — original transaction not found (already transmitted or wrong Uid)
- * - `ResultCode 10044` — user cancelled on terminal (pressed ×)
- * - `ResultCode 10050` — duplicate Xfield (same order ID charged twice)
- * - `ResultCode 10041` — pinpad unreachable
- * - `ResultCode 10053` — pinpad connected but returned empty response
- *
- * @param resultCode - Value of `<ResultCode>` from the response
- * @param status - Value of `<Status>` from the response
- * @param ashStatus - Value of `<AshStatus>` from the response
+ * - `10044` — user cancelled on terminal (pressed ×)
+ * - `10050` — duplicate Xfield (same order ID charged twice)
+ * - `10041` — pinpad unreachable
+ * - `10053` — pinpad connected but returned empty response
+ * - `10048` — terminal hardware/connection error (see Status)
  */
-function buildErrorMessage(
-  resultCode: string | undefined,
-  status: string | undefined,
-  ashStatus: string | undefined
-): string {
-  if (ashStatus && ashStatus !== '0') {
-    if (ashStatus === '4') return 'Declined by credit company';
-    if (ashStatus === '443') return 'Original transaction not found (already transmitted or wrong Uid)';
-    return `Credit company error (AshStatus ${ashStatus})`;
-  }
+function buildResultCodeMessage(resultCode: string | undefined, status: string | undefined): string {
   if (resultCode === '10044') return 'User cancelled on terminal';
   if (resultCode === '10050') return 'Duplicate transaction (Xfield already used)';
   if (resultCode === '10041') return 'Cannot reach Pinpad';
