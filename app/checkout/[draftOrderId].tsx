@@ -32,7 +32,6 @@ import { hardwareService } from '@/utils/hardware/HardwareService';
 import { formatDate } from '@/utils/date';
 import { useTenders, type Tender, type TenderMethod } from '@/hooks/useTenders';
 import { useShippingOptions } from '@/api/hooks/shipping-options';
-import { BottomSheet } from '@/components/ui/BottomSheet';
 import { AdminDraftOrder, AdminOrderLineItem, AdminPromotion } from '@medusajs/types';
 import { FlashList, ListRenderItem } from '@shopify/flash-list';
 import { router, useLocalSearchParams, usePathname } from 'expo-router';
@@ -332,17 +331,13 @@ export default function CheckoutScreen() {
   const [addError, setAddError] = React.useState<PaymentError>({});
   const [chargingAmount, setChargingAmount] = React.useState<number>(0);
 
-  // Shipping option picker — defaults to the first option available at the
-  // configured stock location. Cashier can change it via the bottom sheet.
+  // Shipping option picker — optional. POS sales default to in-store pickup
+  // (no shipping_option_id), so we don't auto-pick. The cashier opens the
+  // sheet only when an item needs to be shipped, and the chosen option is
+  // saved to order metadata for the later fulfillment call.
   const shippingOptions = useShippingOptions(settings.data?.stock_location?.id);
   const [shippingOptionId, setShippingOptionId] = React.useState<string | undefined>();
   const [shippingPickerOpen, setShippingPickerOpen] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!shippingOptionId && shippingOptions.data && shippingOptions.data.length > 0) {
-      setShippingOptionId(shippingOptions.data[0].id);
-    }
-  }, [shippingOptions.data, shippingOptionId]);
 
   const selectedShippingOption = React.useMemo(
     () => shippingOptions.data?.find((o) => o.id === shippingOptionId),
@@ -580,6 +575,30 @@ export default function CheckoutScreen() {
               {/* Customer */}
               <CustomerBadge customer={currentDraftOrder.data?.draft_order.customer ?? undefined} />
 
+              {/* Shipping method — optional. POS sales are usually pickup, so
+                  this stays unselected by default; pick one only when the
+                  item needs to be fulfilled later. */}
+              {(shippingOptions.data?.length ?? 0) > 0 && (
+                <Pressable
+                  onPress={() => setShippingPickerOpen(true)}
+                  className="mb-4 flex-row items-center justify-between rounded-xl border border-gray-200 px-4 py-3"
+                  disabled={completeOrder.isPending}
+                >
+                  <View className="flex-row items-center gap-3">
+                    <Text className="text-xl">{selectedShippingOption ? '🚚' : '🏬'}</Text>
+                    <View>
+                      <Text className="text-xs text-gray-400">
+                        Fulfillment {selectedShippingOption ? '' : '(optional)'}
+                      </Text>
+                      <Text className="text-sm">
+                        {selectedShippingOption?.name ?? 'In-store pickup'}
+                      </Text>
+                    </View>
+                  </View>
+                  <ChevronDown size={18} />
+                </Pressable>
+              )}
+
               {/* Promotions */}
               <PromotionBadge
                 onAddPromotion={(code) => addPromotion.mutate(code)}
@@ -625,23 +644,6 @@ export default function CheckoutScreen() {
                   </View>
                 )}
               </View>
-
-              {/* Shipping method picker */}
-              {(shippingOptions.data?.length ?? 0) > 0 && (
-                <Pressable
-                  onPress={() => setShippingPickerOpen(true)}
-                  className="mt-4 flex-row items-center justify-between rounded-xl border border-gray-200 px-4 py-3"
-                  disabled={completeOrder.isPending}
-                >
-                  <View>
-                    <Text className="text-xs text-gray-400">Shipping</Text>
-                    <Text className="text-sm">
-                      {selectedShippingOption?.name ?? 'Select shipping…'}
-                    </Text>
-                  </View>
-                  <ChevronDown size={18} />
-                </Pressable>
-              )}
 
               {/* Grand total + running balance */}
               <View className="mt-3 border-t border-gray-200 pt-3">
@@ -768,13 +770,37 @@ export default function CheckoutScreen() {
         </View>
       </View>
 
-      {/* Shipping option picker */}
-      <BottomSheet
+      {/* Shipping option picker — centered Dialog avoids being clipped by the
+          Android system nav bar that the bottom-sheet variant ran into on
+          landscape P3 Mix. */}
+      <Dialog
         visible={shippingPickerOpen}
         onClose={() => setShippingPickerOpen(false)}
         title="Shipping method"
+        contentClassName="max-w-md w-full"
       >
         <View className="gap-2">
+          <Pressable
+            onPress={() => {
+              setShippingOptionId(undefined);
+              setShippingPickerOpen(false);
+            }}
+            className={`flex-row items-center justify-between rounded-xl border px-4 py-3 ${
+              !shippingOptionId ? 'border-black bg-gray-100' : 'border-gray-200'
+            }`}
+          >
+            <View className="flex-row items-center gap-3">
+              <Text className="text-xl">🏬</Text>
+              <View>
+                <Text className={`text-sm ${!shippingOptionId ? 'font-medium' : ''}`}>
+                  In-store pickup
+                </Text>
+                <Text className="text-xs text-gray-400">Customer takes items now</Text>
+              </View>
+            </View>
+            {!shippingOptionId && <Text>✓</Text>}
+          </Pressable>
+
           {(shippingOptions.data ?? []).map((option) => {
             const isSelected = option.id === shippingOptionId;
             return (
@@ -788,13 +814,16 @@ export default function CheckoutScreen() {
                   isSelected ? 'border-black bg-gray-100' : 'border-gray-200'
                 }`}
               >
-                <Text className={`text-sm ${isSelected ? 'font-medium' : ''}`}>{option.name}</Text>
+                <View className="flex-row items-center gap-3">
+                  <Text className="text-xl">🚚</Text>
+                  <Text className={`text-sm ${isSelected ? 'font-medium' : ''}`}>{option.name}</Text>
+                </View>
                 {isSelected && <Text>✓</Text>}
               </Pressable>
             );
           })}
         </View>
-      </BottomSheet>
+      </Dialog>
 
       {/* Order confirmed dialog (existing logic) */}
       <Dialog

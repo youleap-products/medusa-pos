@@ -178,7 +178,14 @@ export const useFulfillOrder = (
 
   return useMutation({
     mutationKey: ['orders', 'fulfill'],
-    mutationFn: async ({ order }: FulfillOrderInput): Promise<void> => {
+    mutationFn: async ({ order: cachedOrder }: FulfillOrderInput): Promise<void> => {
+      // Refetch right before fulfilling — the order passed in is cached
+      // TanStack state that may pre-date convertToOrder, and Medusa's line-item
+      // ids on the converted order don't match the draft's. Always use
+      // server-fresh ids and metadata for the payload.
+      const { order } = await sdk.admin.order.retrieve(cachedOrder.id, {
+        fields: '+items.*,+items.detail.*,+metadata',
+      });
       const unfulfilledItems = order.items
         ?.filter((item) => item.quantity - (item.detail?.fulfilled_quantity ?? 0) > 0)
         .map((item) => ({
@@ -191,9 +198,19 @@ export const useFulfillOrder = (
       }
 
       const locationId = settings.data?.stock_location?.id;
+      // Recover the shipping option the cashier picked at checkout. Medusa's
+      // createFulfillment uses this to resolve a fulfillment provider — much
+      // cleaner than pre-attaching a shipping_method to the order, and it
+      // makes shipping a fulfillment-time concern (POS sales rarely ship).
+      const shippingOptionId =
+        (order.metadata as Record<string, unknown> | null | undefined)?.pos_shipping_option_id as
+          | string
+          | undefined;
+
       console.log('[fulfillOrder] step: createFulfillment', {
         orderId: order.id,
         locationId,
+        shippingOptionId,
         items: unfulfilledItems,
       });
 
@@ -201,6 +218,7 @@ export const useFulfillOrder = (
         await sdk.admin.order.createFulfillment(order.id, {
           items: unfulfilledItems,
           ...(locationId ? { location_id: locationId } : {}),
+          ...(shippingOptionId ? { shipping_option_id: shippingOptionId } : {}),
           no_notification: true,
         });
         console.log('[fulfillOrder] createFulfillment done');
@@ -214,43 +232,11 @@ export const useFulfillOrder = (
         throw e;
       }
 
-      // Re-fetch to get the new fulfillment with its item IDs for shipment creation
-      const { order: refreshed } = await sdk.admin.order.retrieve(order.id, {
-        fields: '+fulfillments.*,+fulfillments.items.*',
-      });
-
-      const newFulfillment = refreshed.fulfillments?.find(
-        (f) => !order.fulfillments?.some((existing) => existing.id === f.id),
-      );
-
-      if (newFulfillment) {
-        const fulfillmentWithItems = newFulfillment as typeof newFulfillment & {
-          items?: { id: string; quantity: number }[];
-        };
-        const shipmentItems = (fulfillmentWithItems.items ?? []).map((fi) => ({
-          id: fi.id,
-          quantity: fi.quantity,
-        }));
-        if (shipmentItems.length > 0) {
-          console.log('[fulfillOrder] step: createShipment', {
-            fulfillmentId: newFulfillment.id,
-            items: shipmentItems,
-          });
-          try {
-            await sdk.admin.order.createShipment(order.id, newFulfillment.id, {
-              items: shipmentItems,
-              no_notification: true,
-            });
-            console.log('[fulfillOrder] createShipment done');
-          } catch (e: any) {
-            console.error('[fulfillOrder] createShipment failed', e?.status, JSON.stringify({
-              message: e?.message,
-              statusText: e?.statusText,
-            }));
-            throw e;
-          }
-        }
-      }
+      // Stop at "fulfilled". For in-store pickup the items have physically
+      // changed hands, but Medusa's "delivered" status implies an actual
+      // delivery flow which we don't model in POS — and for shipping cases
+      // the items haven't been delivered yet. A future "Mark as Delivered"
+      // action can be added explicitly for the shipping case.
     },
     ...options,
     onSuccess: async (data, variables, context) => {

@@ -625,47 +625,6 @@ export const useCompleteDraftOrder = (
         // No open edit session — expected
       }
 
-      // Attach a shipping method if the draft order doesn't already have one.
-      // Medusa's createFulfillment workflow reads `shipping_method.provider_id`
-      // to pick a fulfillment provider — without it, "Mark as Fulfilled" later
-      // throws `Cannot read properties of undefined (reading 'provider_id')`.
-      // For POS the cashier doesn't pick shipping (customer takes items now);
-      // we auto-attach the first available option at the configured stock
-      // location and call it good.
-      const hasShippingMethod = (draft_order.shipping_methods?.length ?? 0) > 0;
-      if (!hasShippingMethod && stockLocation?.id) {
-        console.log('[completeOrder] step: addShippingMethod (no method on draft)');
-        try {
-          let optionId = shippingOptionId;
-          if (!optionId) {
-            const { shipping_options } = await sdk.admin.shippingOption.list({
-              stock_location_id: stockLocation.id,
-            });
-            optionId = shipping_options?.[0]?.id;
-            console.log('[completeOrder] auto-picked shipping_option', optionId);
-          }
-          if (optionId) {
-            await sdk.admin.draftOrder.beginEdit(draftOrderId);
-            await sdk.admin.draftOrder.addShippingMethod(draftOrderId, {
-              shipping_option_id: optionId,
-              custom_amount: 0,
-            });
-            await sdk.admin.draftOrder.confirmEdit(draftOrderId);
-            console.log('[completeOrder] shipping method attached', optionId);
-          } else {
-            console.warn(
-              '[completeOrder] no shipping options configured for stock_location',
-              stockLocation.id,
-              '— fulfillment will fail until one is configured in Medusa admin',
-            );
-          }
-        } catch (e: any) {
-          console.error('[completeOrder] addShippingMethod failed', e?.status, e?.message);
-          // Don't block the order on this — payment + complete still run and
-          // the cashier can settle the sale. Fulfillment will throw later.
-        }
-      }
-
       console.log('[completeOrder] step: convertToOrder');
       try {
         await sdk.admin.draftOrder.convertToOrder(draftOrderId);
@@ -713,6 +672,22 @@ export const useCompleteDraftOrder = (
         } else {
           console.error('[completeOrder] pos-payments failed status=', e?.status, 'message=', e?.message);
           throw e;
+        }
+      }
+
+      // Stash the cashier's chosen shipping option in order metadata so
+      // `useFulfillOrder` can pass it to `createFulfillment.shipping_option_id`
+      // later — this lets fulfillment resolve a provider without us having to
+      // attach a shipping_method to the order itself. If the cashier skipped
+      // the picker, fulfillment will rely on Medusa's defaults / fail loudly.
+      if (shippingOptionId) {
+        try {
+          await sdk.admin.order.update(draftOrderId, {
+            metadata: { pos_shipping_option_id: shippingOptionId },
+          });
+          console.log('[completeOrder] pos_shipping_option_id saved', shippingOptionId);
+        } catch (e: any) {
+          console.warn('[completeOrder] failed to save pos_shipping_option_id', e?.message);
         }
       }
 
