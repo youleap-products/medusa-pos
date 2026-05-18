@@ -1,5 +1,4 @@
 import { useUpdateSettings } from '@/contexts/settings';
-import { router } from 'expo-router';
 import React, { useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAvoidingView } from '../KeyboardAvoidingView';
@@ -45,11 +44,7 @@ export const SetupWizardContent: React.FC<SetupWizardContentProps> = ({
   const [regionId, setRegionId] = useState<string>('');
   const [stockLocationId, setStockLocationId] = useState<string>('');
 
-  const updateSettings = useUpdateSettings({
-    onSuccess: () => {
-      router.replace('/(tabs)/products');
-    },
-  });
+  const updateSettings = useUpdateSettings();
 
   const handleSalesChannelComplete = (id: string) => {
     setSalesChannelId(id);
@@ -99,11 +94,14 @@ export const SetupWizardContent: React.FC<SetupWizardContentProps> = ({
   };
 
   const handleWelcomeComplete = async () => {
-    updateSettings.mutate({
-      sales_channel_id: salesChannelId,
-      region_id: regionId,
-      stock_location_id: stockLocationId,
-    });
+    console.log('[welcome] mutating with', { salesChannelId, regionId, stockLocationId });
+    updateSettings.mutate(
+      { sales_channel_id: salesChannelId, region_id: regionId, stock_location_id: stockLocationId },
+      {
+        onSuccess: () => console.log('[welcome] mutate success'),
+        onError: (e) => console.error('[welcome] mutate error', e),
+      },
+    );
   };
 
   const renderCurrentStep = () => {

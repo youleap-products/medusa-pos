@@ -6,7 +6,7 @@ import { LayoutWithKeyboardAvoidingScroll } from '@/components/ui/Layout';
 import { Text } from '@/components/ui/Text';
 import { useAuthCtx } from '@/contexts/auth';
 import React, { useState } from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 import * as z from 'zod/v4';
 
 const isDev = process.env.EXPO_PUBLIC_APP_ENV === 'development';
@@ -19,15 +19,14 @@ const normalizeUrl = (url: string): string => {
 };
 
 const validateMedusaUrl = async (url: string): Promise<boolean> => {
+  if (Platform.OS === 'web') return true;
+
   try {
     const normalizedUrl = normalizeUrl(url);
-    if (!normalizedUrl) {
-      console.error('Invalid URL: empty or undefined');
-      return false;
-    }
+    if (!normalizedUrl) return false;
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(new DOMException('Timeout', 'AbortError')), 10000);
 
     const response = await fetch(`${protocol}://${normalizedUrl}/${healthPath}`, {
       method: 'GET',
@@ -37,16 +36,9 @@ const validateMedusaUrl = async (url: string): Promise<boolean> => {
 
     clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      console.error(`Invalid response from Medusa URL: ${response.status}`);
-      console.error('Response body:', await response.text());
-      return false;
-    }
-
     const text = await response.text();
-    return text.trim().toLowerCase() === 'ok';
-  } catch (error) {
-    console.error('Error validating Medusa URL:', error);
+    return response.ok && text.trim().toLowerCase() === 'ok';
+  } catch {
     return false;
   }
 };
@@ -59,14 +51,11 @@ const loginSchema = z.object({
     .refine(
       async (url) => {
         if (!url) return false;
-
         try {
           new URL(`${protocol}://${url}`);
         } catch {
-          console.error('Invalid URL format');
           return false;
         }
-
         return await validateMedusaUrl(url);
       },
       {

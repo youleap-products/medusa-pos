@@ -28,6 +28,7 @@ import { Text } from '@/components/ui/Text';
 import { useSettings } from '@/contexts/settings';
 import { paymentService } from '@/utils/payment/PaymentService';
 import { shortenXfield } from '@/utils/payment/xfield';
+import { hardwareService } from '@/utils/hardware/HardwareService';
 import { formatDate } from '@/utils/date';
 import { AdminDraftOrder, AdminOrderLineItem, AdminPromotion } from '@medusajs/types';
 import { FlashList, ListRenderItem } from '@shopify/flash-list';
@@ -52,25 +53,25 @@ const DraftOrderItem: React.FC<{ item: AdminOrderLineItem }> = ({ item }) => {
   const thumbnail = item.thumbnail || item.product?.thumbnail || item.product?.images?.[0]?.url;
 
   return (
-    <View className="flex-row gap-4 bg-panel py-5">
-      <View className="h-20 w-20 overflow-hidden rounded-xl bg-gray-700">
+    <View className="flex-row gap-4 bg-white py-5">
+      <View className="h-20 w-20 overflow-hidden rounded-xl bg-gray-200">
         {thumbnail && <Image source={{ uri: thumbnail }} className="h-full w-full object-cover" />}
       </View>
       <View className="flex-1 flex-col gap-1">
-        <Text className="text-white">{item.product_title}</Text>
+        <Text>{item.product_title}</Text>
         {item.variant?.options && item.variant.options.length > 0 && (
           <View className="flex-row flex-wrap gap-x-2 gap-y-1">
             {item.variant.options.map((option) => (
               <View className="flex-row gap-1" key={option.id}>
                 <Text className="text-xs text-gray-400">{option.option?.title || option.option_id}:</Text>
-                <Text className="text-xs text-gray-300">{option.value}</Text>
+                <Text className="text-xs text-gray-400">{option.value}</Text>
               </View>
             ))}
           </View>
         )}
         <Text className="text-sm text-gray-400">× {item.quantity}</Text>
       </View>
-      <Text className="ml-auto font-mono text-white">
+      <Text className="ml-auto">
         {(item.unit_price * item.quantity).toLocaleString('en-US', {
           style: 'currency',
           currency: draftOrder.data?.draft_order.region?.currency_code || settings.data?.region?.currency_code,
@@ -93,47 +94,46 @@ const CustomerBadge: React.FC<{ customer: AdminDraftOrder['customer'] }> = ({ cu
         onPress={() => router.push('/customer-lookup')}
         variant="outline"
         icon={<UserRoundPlus size={20} />}
-        className="mb-4 justify-between border-gray-600"
+        className="mb-3 justify-between"
       >
         Add Customer
       </Button>
     );
   }
 
-  const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ');
+  const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ') || customer.email;
 
   return (
-    <TouchableOpacity
-      onPress={() =>
-        router.push({ pathname: '/customer-lookup', params: { customerId: customer.id } })
-      }
-      className="mb-4 flex-row items-center justify-between border-b border-gray-700 pb-4"
-    >
-      <View>
-        {customerName.length > 0 ? (
-          <>
-            <Text className="text-white">{customerName}</Text>
-            <Text className="text-sm text-gray-400">{customer.email}</Text>
-          </>
-        ) : (
-          <>
-            <Text className="text-sm text-gray-400">Customer</Text>
-            <Text className="text-white">{customer.email}</Text>
-          </>
-        )}
-      </View>
-      <View className="flex-row">
-        <View className="p-2">
-          <ChevronDown size={20} color="#9CA3AF" />
+    <SwipeableListItem
+      rightClassName="bg-white"
+      rightWidth={64}
+      rightContent={
+        <View className="h-full w-full flex-1 items-center justify-center p-1">
+          <Pressable
+            className="h-full w-full flex-1 items-center justify-center rounded-xl bg-error-500"
+            onPress={() => updateDraftOrder.mutate(defaultCustomer.data?.pages[0].customers?.[0])}
+          >
+            <X size={20} color="white" />
+          </Pressable>
         </View>
-        <TouchableOpacity
-          onPress={() => updateDraftOrder.mutate(defaultCustomer.data?.pages[0].customers?.[0])}
-          className="p-2"
-        >
-          <X size={20} color="#9CA3AF" />
-        </TouchableOpacity>
-      </View>
-    </TouchableOpacity>
+      }
+    >
+      <TouchableOpacity
+        onPress={() => router.push({ pathname: '/customer-lookup', params: { customerId: customer.id } })}
+        className="mb-3 flex-row items-center gap-3 bg-white py-2"
+      >
+        <View className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100">
+          <UserRoundPlus size={20} color="#888888" />
+        </View>
+        <View className="flex-1">
+          <Text className="text-sm font-medium">{customerName}</Text>
+          {customerName !== customer.email && (
+            <Text className="text-xs text-gray-400">{customer.email}</Text>
+          )}
+        </View>
+        <ChevronDown size={16} color="#888888" />
+      </TouchableOpacity>
+    </SwipeableListItem>
   );
 };
 
@@ -157,7 +157,7 @@ const PromotionBadge: React.FC<PromotionBadgeProps> = ({ onAddPromotion, isAddin
         onPress={() => setIsDialogOpen(true)}
         variant="outline"
         icon={<Tag size={16} />}
-        className="mb-3 justify-between border-gray-600"
+        className="mb-3 justify-between"
       >
         Add Promotion
       </Button>
@@ -207,7 +207,7 @@ const PromotionItem: React.FC<{
 
   return (
     <SwipeableListItem
-      rightClassName="bg-panel"
+      rightClassName="bg-white"
       rightWidth={isAutomatic ? undefined : 64}
       rightContent={
         isAutomatic ? undefined : (
@@ -222,15 +222,15 @@ const PromotionItem: React.FC<{
         )
       }
     >
-      <View className="flex-row items-center gap-3 bg-panel py-3">
-        <View className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-900">
-          <Tag size={20} color="#10B981" />
+      <View className="flex-row items-center gap-3 bg-white py-3">
+        <View className="flex h-10 w-10 items-center justify-center rounded-xl bg-success-200">
+          <Tag size={20} color="#469B3B" />
         </View>
         <View className="flex-1">
-          <Text className="text-sm font-medium text-white">{item.code || 'Promotion'}</Text>
+          <Text className="text-sm font-medium">{item.code || 'Promotion'}</Text>
           <Text className="text-xs text-gray-400">{isAutomatic ? 'Automatic' : 'Code'}</Text>
         </View>
-        <Text className="font-mono text-sm text-green-400">
+        <Text className="font-mono text-sm text-success-500">
           {(item.discount_amount * -1).toLocaleString('en-US', {
             style: 'currency',
             currency: currencyCode,
@@ -249,15 +249,13 @@ const ChargingOverlay: React.FC<{
   onCancel: () => void;
 }> = ({ amount, onCancel }) => (
   <View className="flex-1 items-center justify-center gap-6 px-6">
-    <ActivityIndicator size="large" color="#A3E635" />
+    <ActivityIndicator size="large" color="#282828" />
     <View className="items-center gap-2">
-      <Text className="text-4xl font-mono font-bold text-white">{amount}</Text>
-      <Text className="text-lg text-white">Waiting for payment</Text>
-      <Text className="text-sm text-gray-400 text-center">
-        Present card on terminal
-      </Text>
+      <Text className="text-4xl font-bold">{amount}</Text>
+      <Text className="text-lg">Waiting for payment</Text>
+      <Text className="text-sm text-gray-400 text-center">Present card on terminal</Text>
     </View>
-    <Button variant="outline" className="border-gray-600 w-full" onPress={onCancel}>
+    <Button variant="outline" className="w-full" onPress={onCancel}>
       Cancel
     </Button>
   </View>
@@ -271,19 +269,17 @@ const SuccessOverlay: React.FC<{
   cardName?: string;
 }> = ({ amount, pan, cardName }) => (
   <View className="flex-1 items-center justify-center gap-6 px-6">
-    <View className="h-20 w-20 items-center justify-center rounded-full bg-green-900">
+    <View className="h-20 w-20 items-center justify-center rounded-full bg-success-200">
       <Text className="text-4xl">✓</Text>
     </View>
     <View className="items-center gap-1">
-      <Text className="text-2xl font-bold text-green-400">Payment approved</Text>
-      <Text className="text-3xl font-mono font-bold text-white">{amount}</Text>
+      <Text className="text-2xl font-bold text-success-500">Payment approved</Text>
+      <Text className="text-3xl font-bold">{amount}</Text>
       {(cardName || pan) && (
-        <Text className="text-sm text-gray-400">
-          {[cardName, pan].filter(Boolean).join(' · ')}
-        </Text>
+        <Text className="text-sm text-gray-400">{[cardName, pan].filter(Boolean).join(' · ')}</Text>
       )}
     </View>
-    <Text className="text-sm text-gray-500">Completing order…</Text>
+    <Text className="text-sm text-gray-400">Completing order…</Text>
   </View>
 );
 
@@ -295,23 +291,23 @@ const FailedOverlay: React.FC<{
   onCancel: () => void;
 }> = ({ error, onRetry, onCancel }) => (
   <View className="flex-1 items-center justify-center gap-6 px-6">
-    <View className="h-20 w-20 items-center justify-center rounded-full bg-red-900">
+    <View className="h-20 w-20 items-center justify-center rounded-full bg-error-200">
       <Text className="text-4xl">✕</Text>
     </View>
     <View className="items-center gap-2">
-      <Text className="text-2xl font-bold text-red-400">Payment declined</Text>
+      <Text className="text-2xl font-bold text-error-500">Payment declined</Text>
       {error.message && (
         <Text className="text-sm text-gray-400 text-center">{error.message}</Text>
       )}
       {error.code && (
-        <Text className="text-xs text-gray-500">{error.code}</Text>
+        <Text className="text-xs text-gray-400">{error.code}</Text>
       )}
     </View>
     <View className="w-full gap-3">
-      <Button onPress={onRetry} className="w-full bg-lime-400">
+      <Button onPress={onRetry} className="w-full">
         Try Again
       </Button>
-      <Button variant="outline" onPress={onCancel} className="w-full border-gray-600">
+      <Button variant="outline" onPress={onCancel} className="w-full">
         Cancel
       </Button>
     </View>
@@ -359,11 +355,31 @@ export default function CheckoutScreen() {
     [draftOrder.data?.total, currencyCode],
   );
 
+  const buildReceiptData = React.useCallback((method: PaymentMethod, pan?: string, cardName?: string) => ({
+    orderNumber: draftOrder.data?.display_id,
+    items: (draftOrder.data?.items ?? []).map((item) => ({
+      title: item.product_title ?? '',
+      quantity: item.quantity,
+      unitPrice: item.unit_price,
+    })),
+    subtotal: draftOrder.data?.subtotal ?? 0,
+    taxTotal: draftOrder.data?.tax_total ?? 0,
+    discountTotal: draftOrder.data?.discount_total ?? 0,
+    total: draftOrder.data?.total ?? 0,
+    currencyCode: currencyCode ?? 'ils',
+    paymentMethod: method,
+    pan,
+    cardName,
+  }), [draftOrder.data, currencyCode]);
+
   const handlePay = React.useCallback(async () => {
     if (!draftOrder.data?.total || !draftOrderId) return;
 
     if (selectedMethod === 'cash') {
-      completeOrder.mutate();
+      hardwareService.openCashDrawer();
+      completeOrder.mutate({ capturePayment: true }, {
+        onSuccess: () => hardwareService.printReceipt(buildReceiptData('cash')),
+      });
       return;
     }
 
@@ -379,7 +395,9 @@ export default function CheckoutScreen() {
       if (result.success) {
         setPaymentMeta({ pan: result.pan, cardName: result.cardName });
         setPaymentState('success');
-        setTimeout(() => completeOrder.mutate(), 1500);
+        setTimeout(() => completeOrder.mutate({ capturePayment: true, paymentUid: result.uid }, {
+          onSuccess: () => hardwareService.printReceipt(buildReceiptData('card', result.pan, result.cardName)),
+        }), 1500);
       } else {
         setPaymentError({ code: result.errorCode, message: result.errorMessage });
         setPaymentState('failed');
@@ -408,8 +426,8 @@ export default function CheckoutScreen() {
 
   if (draftOrder.isError || settings.isError) {
     return (
-      <Layout className="bg-canvas">
-        <Text className="text-4xl text-white">Checkout</Text>
+      <Layout>
+        <Text className="text-4xl">Checkout</Text>
         <View className="flex-1 items-center justify-center gap-2">
           <InfoBanner variant="ghost" colorScheme="error" className="w-40">
             Failed to load cart
@@ -428,15 +446,15 @@ export default function CheckoutScreen() {
 
   if (!draftOrder.data?.items.length) {
     return (
-      <Layout className="bg-canvas">
-        <Text className="text-4xl text-white">Checkout</Text>
+      <Layout>
+        <Text className="text-4xl">Checkout</Text>
         <View className="flex-1 items-center justify-center gap-2">
-          <ShoppingCart size={24} color="#9CA3AF" />
-          <Text className="text-xl text-white">Your cart is empty</Text>
+          <ShoppingCart size={24} />
+          <Text className="text-xl">Your cart is empty</Text>
           <Text className="text-center text-gray-400">Add items to your cart before checking out.</Text>
         </View>
         <View className="flex-row gap-2">
-          <Button variant="outline" className="flex-1 border-gray-600" onPress={() => router.back()}>
+          <Button variant="outline" className="flex-1" onPress={() => router.back()}>
             Back to Cart
           </Button>
           <Button className="flex-1" disabled>Pay</Button>
@@ -456,23 +474,23 @@ export default function CheckoutScreen() {
   return (
     <>
       {/* Two-panel landscape layout */}
-      <View className="flex-1 flex-row bg-canvas gap-4 p-4">
+      <View className="flex-1 flex-row bg-gray-100 gap-4 p-4">
 
         {/* ── Left panel: cart items ── */}
-        <View className="flex-1 rounded-2xl bg-panel overflow-hidden">
+        <View className="flex-1 rounded-2xl bg-white overflow-hidden">
           <View className="px-5 pt-5 pb-3">
-            <Text className="text-2xl font-semibold text-white">Order Items</Text>
+            <Text className="text-2xl">Order Items</Text>
           </View>
           <FlashList
             data={draftOrder.data.items}
             renderItem={renderItem}
-            ItemSeparatorComponent={() => <View className="h-px mx-5 bg-gray-700" />}
+            ItemSeparatorComponent={() => <View className="h-px mx-5 bg-gray-200" />}
             contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
           />
         </View>
 
         {/* ── Right panel: invoice + payment ── */}
-        <View className="w-[42%] rounded-2xl bg-panel overflow-hidden">
+        <View className="w-[42%] rounded-2xl bg-white overflow-hidden">
           {paymentState === 'charging' ? (
             <ChargingOverlay amount={formattedTotal} onCancel={handleCancelPayment} />
           ) : paymentState === 'success' ? (
@@ -509,10 +527,10 @@ export default function CheckoutScreen() {
               ))}
 
               {/* Totals */}
-              <View className="mt-4 gap-2 border-t border-gray-700 pt-4">
+              <View className="mt-4 gap-2 border-t border-gray-200 pt-4">
                 <View className="flex-row justify-between">
                   <Text className="text-sm text-gray-400">Taxes</Text>
-                  <Text className="font-mono text-sm text-gray-400">
+                  <Text className="text-sm text-gray-400">
                     {(draftOrder.data.tax_total ?? 0).toLocaleString('en-US', {
                       style: 'currency', currency: currencyCode, currencyDisplay: 'narrowSymbol',
                     })}
@@ -520,7 +538,7 @@ export default function CheckoutScreen() {
                 </View>
                 <View className="flex-row justify-between">
                   <Text className="text-sm text-gray-400">Subtotal</Text>
-                  <Text className="font-mono text-sm text-gray-400">
+                  <Text className="text-sm text-gray-400">
                     {(draftOrder.data.subtotal ?? 0).toLocaleString('en-US', {
                       style: 'currency', currency: currencyCode, currencyDisplay: 'narrowSymbol',
                     })}
@@ -529,7 +547,7 @@ export default function CheckoutScreen() {
                 {typeof draftOrder.data.discount_total === 'number' && draftOrder.data.discount_total > 0 && (
                   <View className="flex-row justify-between">
                     <Text className="text-sm text-gray-400">Discount</Text>
-                    <Text className="font-mono text-sm text-green-400">
+                    <Text className="text-sm text-success-500">
                       {(draftOrder.data.discount_total * -1).toLocaleString('en-US', {
                         style: 'currency', currency: currencyCode, currencyDisplay: 'narrowSymbol',
                       })}
@@ -539,9 +557,9 @@ export default function CheckoutScreen() {
               </View>
 
               {/* Grand total */}
-              <View className="mt-3 flex-row justify-between border-t border-gray-700 pt-3">
-                <Text className="text-xl font-semibold text-white">Total</Text>
-                <Text className="font-mono text-xl font-bold text-white">{formattedTotal}</Text>
+              <View className="mt-3 flex-row justify-between border-t border-gray-200 pt-3">
+                <Text className="text-xl">Total</Text>
+                <Text className="text-xl font-bold">{formattedTotal}</Text>
               </View>
 
               {/* Payment method tiles */}
@@ -549,28 +567,20 @@ export default function CheckoutScreen() {
                 <Pressable
                   onPress={() => setSelectedMethod('card')}
                   className={`flex-1 items-center justify-center rounded-xl border py-4 gap-1 ${
-                    selectedMethod === 'card' ? 'border-lime-400 bg-lime-400/10' : 'border-gray-600'
+                    selectedMethod === 'card' ? 'border-black bg-gray-100' : 'border-gray-200'
                   }`}
                 >
-                  <Text className={selectedMethod === 'card' ? 'text-lime-400 text-2xl' : 'text-gray-400 text-2xl'}>
-                    💳
-                  </Text>
-                  <Text className={`text-sm font-medium ${selectedMethod === 'card' ? 'text-lime-400' : 'text-gray-400'}`}>
-                    Card
-                  </Text>
+                  <Text className="text-2xl">💳</Text>
+                  <Text className={`text-sm ${selectedMethod === 'card' ? '' : 'text-gray-400'}`}>Card</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => setSelectedMethod('cash')}
                   className={`flex-1 items-center justify-center rounded-xl border py-4 gap-1 ${
-                    selectedMethod === 'cash' ? 'border-lime-400 bg-lime-400/10' : 'border-gray-600'
+                    selectedMethod === 'cash' ? 'border-black bg-gray-100' : 'border-gray-200'
                   }`}
                 >
-                  <Text className={selectedMethod === 'cash' ? 'text-lime-400 text-2xl' : 'text-gray-400 text-2xl'}>
-                    💵
-                  </Text>
-                  <Text className={`text-sm font-medium ${selectedMethod === 'cash' ? 'text-lime-400' : 'text-gray-400'}`}>
-                    Cash
-                  </Text>
+                  <Text className="text-2xl">💵</Text>
+                  <Text className={`text-sm ${selectedMethod === 'cash' ? '' : 'text-gray-400'}`}>Cash</Text>
                 </Pressable>
               </View>
 
@@ -578,14 +588,14 @@ export default function CheckoutScreen() {
               <View className="mt-4 flex-row gap-3">
                 <Button
                   variant="outline"
-                  className="flex-1 border-gray-600"
+                  className="flex-1"
                   onPress={() => router.back()}
                   disabled={!isDraftOrder || completeOrder.isPending}
                 >
                   Back
                 </Button>
                 <Button
-                  className="flex-1 bg-lime-400"
+                  className="flex-1"
                   onPress={handlePay}
                   disabled={!isDraftOrder || completeOrder.isPending}
                   isPending={completeOrder.isPending}

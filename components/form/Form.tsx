@@ -43,7 +43,7 @@ export function Form<T extends FieldValues, Output>({
   const methods = useForm({
     resolver: zodResolver(schema),
     defaultValues,
-    mode: 'onChange',
+    mode: 'onBlur',
   });
 
   const handleSubmit = methods.handleSubmit((data, event) => {
