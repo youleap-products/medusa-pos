@@ -191,12 +191,28 @@ export const useFulfillOrder = (
       }
 
       const locationId = settings.data?.stock_location?.id;
-
-      await sdk.admin.order.createFulfillment(order.id, {
+      console.log('[fulfillOrder] step: createFulfillment', {
+        orderId: order.id,
+        locationId,
         items: unfulfilledItems,
-        ...(locationId ? { location_id: locationId } : {}),
-        no_notification: true,
       });
+
+      try {
+        await sdk.admin.order.createFulfillment(order.id, {
+          items: unfulfilledItems,
+          ...(locationId ? { location_id: locationId } : {}),
+          no_notification: true,
+        });
+        console.log('[fulfillOrder] createFulfillment done');
+      } catch (e: any) {
+        console.error('[fulfillOrder] createFulfillment failed', e?.status, JSON.stringify({
+          message: e?.message,
+          statusText: e?.statusText,
+          type: e?.type,
+          response: e?.response,
+        }));
+        throw e;
+      }
 
       // Re-fetch to get the new fulfillment with its item IDs for shipment creation
       const { order: refreshed } = await sdk.admin.order.retrieve(order.id, {
@@ -216,10 +232,23 @@ export const useFulfillOrder = (
           quantity: fi.quantity,
         }));
         if (shipmentItems.length > 0) {
-          await sdk.admin.order.createShipment(order.id, newFulfillment.id, {
+          console.log('[fulfillOrder] step: createShipment', {
+            fulfillmentId: newFulfillment.id,
             items: shipmentItems,
-            no_notification: true,
           });
+          try {
+            await sdk.admin.order.createShipment(order.id, newFulfillment.id, {
+              items: shipmentItems,
+              no_notification: true,
+            });
+            console.log('[fulfillOrder] createShipment done');
+          } catch (e: any) {
+            console.error('[fulfillOrder] createShipment failed', e?.status, JSON.stringify({
+              message: e?.message,
+              statusText: e?.statusText,
+            }));
+            throw e;
+          }
         }
       }
     },

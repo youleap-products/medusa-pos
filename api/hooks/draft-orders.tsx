@@ -549,6 +549,13 @@ export type CompleteDraftOrderInput = {
    * zero-amount cash tender, recorded for audit).
    */
   tenders: CompleteDraftOrderTender[];
+  /**
+   * Shipping option to attach to the draft order before conversion. Optional —
+   * when omitted, we auto-pick the first option configured for the stock
+   * location. Pass it explicitly when the cashier picked a different option
+   * from the checkout screen.
+   */
+  shippingOptionId?: string;
 };
 
 export const useCompleteDraftOrder = (
@@ -561,7 +568,7 @@ export const useCompleteDraftOrder = (
 
   return useMutation({
     mutationKey: ['draft-order', draftOrderId, 'complete'],
-    mutationFn: async ({ tenders }: CompleteDraftOrderInput) => {
+    mutationFn: async ({ tenders, shippingOptionId }: CompleteDraftOrderInput) => {
       if (!draftOrderId) {
         throw new Error('Draft order ID is required to complete the order');
       }
@@ -618,6 +625,47 @@ export const useCompleteDraftOrder = (
         // No open edit session — expected
       }
 
+      // Attach a shipping method if the draft order doesn't already have one.
+      // Medusa's createFulfillment workflow reads `shipping_method.provider_id`
+      // to pick a fulfillment provider — without it, "Mark as Fulfilled" later
+      // throws `Cannot read properties of undefined (reading 'provider_id')`.
+      // For POS the cashier doesn't pick shipping (customer takes items now);
+      // we auto-attach the first available option at the configured stock
+      // location and call it good.
+      const hasShippingMethod = (draft_order.shipping_methods?.length ?? 0) > 0;
+      if (!hasShippingMethod && stockLocation?.id) {
+        console.log('[completeOrder] step: addShippingMethod (no method on draft)');
+        try {
+          let optionId = shippingOptionId;
+          if (!optionId) {
+            const { shipping_options } = await sdk.admin.shippingOption.list({
+              stock_location_id: stockLocation.id,
+            });
+            optionId = shipping_options?.[0]?.id;
+            console.log('[completeOrder] auto-picked shipping_option', optionId);
+          }
+          if (optionId) {
+            await sdk.admin.draftOrder.beginEdit(draftOrderId);
+            await sdk.admin.draftOrder.addShippingMethod(draftOrderId, {
+              shipping_option_id: optionId,
+              custom_amount: 0,
+            });
+            await sdk.admin.draftOrder.confirmEdit(draftOrderId);
+            console.log('[completeOrder] shipping method attached', optionId);
+          } else {
+            console.warn(
+              '[completeOrder] no shipping options configured for stock_location',
+              stockLocation.id,
+              '— fulfillment will fail until one is configured in Medusa admin',
+            );
+          }
+        } catch (e: any) {
+          console.error('[completeOrder] addShippingMethod failed', e?.status, e?.message);
+          // Don't block the order on this — payment + complete still run and
+          // the cashier can settle the sale. Fulfillment will throw later.
+        }
+      }
+
       console.log('[completeOrder] step: convertToOrder');
       try {
         await sdk.admin.draftOrder.convertToOrder(draftOrderId);
@@ -637,9 +685,11 @@ export const useCompleteDraftOrder = (
       // with N sessions" model Medusa documents for split payments.
       //
       // TODO(backend): implement `POST /admin/orders/:id/pos-payments` on
-      // medusa-backend. Until then a 404 is expected — we swallow it so the
-      // rest of the flow (order complete + receipt print) still runs during
-      // development. Order will sit in `not_paid` until the route lands.
+      // medusa-backend. Until that ships we fall back to markAsPaid against
+      // the auto-created collection so the order reaches `paid` status —
+      // otherwise Medusa blocks fulfillment on an unpaid order. We lose the
+      // per-tender breakdown in Medusa (still preserved on the printed
+      // receipt) but the order is at least usable end-to-end.
       console.log('[completeOrder] step: pos-payments', tenders);
       try {
         await sdk.client.fetch(`/admin/orders/${draftOrderId}/pos-payments`, {
@@ -649,7 +699,17 @@ export const useCompleteDraftOrder = (
         console.log('[completeOrder] pos-payments recorded');
       } catch (e: any) {
         if (e?.status === 404) {
-          console.warn('[completeOrder] pos-payments route 404 — backend not deployed yet, continuing');
+          console.warn('[completeOrder] pos-payments route 404 — falling back to markAsPaid');
+          const { order: converted } = await sdk.admin.order.retrieve(draftOrderId, {
+            fields: '+payment_collections.*',
+          });
+          const collectionId = converted.payment_collections?.[0]?.id;
+          if (collectionId) {
+            await sdk.admin.paymentCollection.markAsPaid(collectionId, { order_id: draftOrderId });
+            console.log('[completeOrder] markAsPaid fallback done');
+          } else {
+            console.warn('[completeOrder] no payment_collection on order — leaving unpaid');
+          }
         } else {
           console.error('[completeOrder] pos-payments failed status=', e?.status, 'message=', e?.message);
           throw e;
