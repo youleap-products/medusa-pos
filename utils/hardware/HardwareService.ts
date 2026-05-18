@@ -51,6 +51,35 @@ class HardwareService {
     if (!isHardwareEnabled('cashDrawer')) return undefined;
     return this.cashDrawer.getStatus?.();
   }
+
+  /**
+   * Fire the cash drawer directly, ignoring the enable flag. Used by the
+   * hardware settings screen so a cashier can verify the device works even
+   * when the feature is currently disabled.
+   */
+  testCashDrawer(): Promise<void> {
+    return this.cashDrawer.open();
+  }
+
+  /**
+   * Print a canned diagnostic receipt — same path as a real sale, but with
+   * sample data. Ignores the enable flag (same reason as `testCashDrawer`).
+   */
+  testPrinter(): Promise<void> {
+    const sample: ReceiptData = {
+      orderNumber: 'TEST',
+      items: [
+        { title: 'Hardware test print', quantity: 1, unitPrice: 100 },
+      ],
+      subtotal: 100,
+      taxTotal: 0,
+      discountTotal: 0,
+      total: 100,
+      currencyCode: 'ils',
+      tenders: [{ method: 'cash', amount: 100 }],
+    };
+    return this.printer.printReceipt(sample);
+  }
 }
 
 export const hardwareService = new HardwareService();
