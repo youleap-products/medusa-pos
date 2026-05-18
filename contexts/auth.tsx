@@ -1,6 +1,6 @@
 import { isUnauthorizedError } from '@/utils/errors';
 import Medusa from '@medusajs/js-sdk';
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from '@/utils/storage';
 import * as React from 'react';
 import Toast from 'react-native-toast-message';
 

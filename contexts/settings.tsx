@@ -1,7 +1,7 @@
 import { showErrorToast } from '@/utils/errors';
 import Medusa from '@medusajs/js-sdk';
 import { DefaultError, useMutation, UseMutationOptions, useQuery, useQueryClient } from '@tanstack/react-query';
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from '@/utils/storage';
 import * as React from 'react';
 import { useAuthCtx } from './auth';
 
@@ -104,7 +104,7 @@ export const useUpdateSettings = (
     },
     ...options,
     onSuccess: async (...args) => {
-      await client.invalidateQueries({
+      await client.refetchQueries({
         queryKey: ['settings'],
       });
 
