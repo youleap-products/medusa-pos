@@ -63,9 +63,18 @@ export class SunmiPrinter implements Printer {
   }
 
   private writePayment(p: any, data: ReceiptData): void {
-    p.printerText(data.paymentMethod === 'cash' ? 'Payment: Cash\n' : 'Payment: Card\n');
-    if (data.cardName) p.printerText(`${data.cardName}\n`);
-    if (data.pan) p.printerText(`${data.pan}\n`);
+    p.printerText('Payment:\n');
+    for (const tender of data.tenders) {
+      const label = tender.method === 'cash' ? 'Cash' : 'Card';
+      p.printerText(`  ${label}: ${fmt(tender.amount, data.currencyCode)}\n`);
+      if (tender.method === 'card') {
+        if (tender.cardName) p.printerText(`    ${tender.cardName}\n`);
+        if (tender.pan) p.printerText(`    ${tender.pan}\n`);
+      }
+    }
+    if (data.changeDue && data.changeDue > 0) {
+      p.printerText(`  Change: ${fmt(data.changeDue, data.currencyCode)}\n`);
+    }
   }
 }
 

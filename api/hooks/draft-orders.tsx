@@ -528,10 +528,27 @@ export const useUpdateDraftOrderCustomer = (
   });
 };
 
+/**
+ * Tender shape accepted by the backend `/admin/orders/:id/pos-payments` route.
+ * Mirrors the local `Tender` type but drops the UI-only `id`.
+ */
+export interface CompleteDraftOrderTender {
+  method: 'cash' | 'card';
+  /** Amount in the order's smallest currency unit (agorot/cents). */
+  amount: number;
+  /** Caspit Uid for card tenders — used by the backend to record the external reference. */
+  caspit_uid?: string;
+  pan?: string;
+  cardName?: string;
+}
+
 export type CompleteDraftOrderInput = {
-  capturePayment?: boolean;
-  /** 23-digit Caspit Uid from the charge response — saved to order metadata for void/refund later */
-  paymentUid?: string;
+  /**
+   * Tenders that settle the order. Empty array is rejected — every completion
+   * must carry at least one tender (a free order would still have a single
+   * zero-amount cash tender, recorded for audit).
+   */
+  tenders: CompleteDraftOrderTender[];
 };
 
 export const useCompleteDraftOrder = (
@@ -544,9 +561,12 @@ export const useCompleteDraftOrder = (
 
   return useMutation({
     mutationKey: ['draft-order', draftOrderId, 'complete'],
-    mutationFn: async ({ capturePayment = false, paymentUid }: CompleteDraftOrderInput = {}) => {
+    mutationFn: async ({ tenders }: CompleteDraftOrderInput) => {
       if (!draftOrderId) {
         throw new Error('Draft order ID is required to complete the order');
+      }
+      if (!tenders || tenders.length === 0) {
+        throw new Error('At least one tender is required to complete the order');
       }
 
       const { draft_order } = await sdk.admin.draftOrder.retrieve(draftOrderId, {
@@ -611,42 +631,32 @@ export const useCompleteDraftOrder = (
       // remain in storage or the next addItems will 500 against a non-draft order.
       await SecureStore.deleteItemAsync(DRAFT_ORDER_ID_STORAGE_KEY);
 
-      console.log('[completeOrder] capturePayment=', capturePayment, 'paymentUid=', paymentUid);
-      if (capturePayment) {
-        try {
-          // Medusa auto-creates a payment collection on convertToOrder.
-          // Retrieve it rather than creating a second one (which fails with 500).
-          const { order: convertedOrder } = await sdk.admin.order.retrieve(draftOrderId, {
-            fields: '+payment_collections.*',
-          });
-
-          const existingCollection = convertedOrder.payment_collections?.[0];
-          console.log('[completeOrder] existing collection id=', existingCollection?.id, 'status=', existingCollection?.status);
-
-          const collectionId = existingCollection
-            ? existingCollection.id
-            : (await sdk.admin.paymentCollection.create({ order_id: draftOrderId })).payment_collection.id;
-
-          await sdk.admin.paymentCollection.markAsPaid(collectionId, {
-            order_id: draftOrderId,
-          });
-          console.log('[completeOrder] markAsPaid done');
-        } catch (e: any) {
-          console.error('[completeOrder] payment capture failed status=', e?.status, 'message=', e?.message);
+      // Record each tender via the custom POS payments route. The backend
+      // orchestrates createPaymentSessions + capturePayment per tender against
+      // the auto-created payment collection, matching the "one payment_collection
+      // with N sessions" model Medusa documents for split payments.
+      //
+      // TODO(backend): implement `POST /admin/orders/:id/pos-payments` on
+      // medusa-backend. Until then a 404 is expected — we swallow it so the
+      // rest of the flow (order complete + receipt print) still runs during
+      // development. Order will sit in `not_paid` until the route lands.
+      console.log('[completeOrder] step: pos-payments', tenders);
+      try {
+        await sdk.client.fetch(`/admin/orders/${draftOrderId}/pos-payments`, {
+          method: 'POST',
+          body: { tenders },
+        });
+        console.log('[completeOrder] pos-payments recorded');
+      } catch (e: any) {
+        if (e?.status === 404) {
+          console.warn('[completeOrder] pos-payments route 404 — backend not deployed yet, continuing');
+        } else {
+          console.error('[completeOrder] pos-payments failed status=', e?.status, 'message=', e?.message);
           throw e;
         }
       }
 
-      if (paymentUid) {
-        const updated = await sdk.admin.order.update(draftOrderId, {
-          metadata: { caspit_uid: paymentUid },
-        });
-        console.log('[completeOrder] metadata saved, caspit_uid=', updated.order.metadata?.caspit_uid);
-      }
-
-      await sdk.client.fetch(`/admin/orders/${draftOrderId}/complete`, {
-        method: 'POST',
-      });
+      await sdk.admin.order.complete(draftOrderId, {});
     },
     ...options,
     onSettled: async (...args) => {

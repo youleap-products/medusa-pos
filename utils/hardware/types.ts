@@ -12,6 +12,14 @@ export interface ReceiptItem {
   unitPrice: number;
 }
 
+/** Single payment line on the receipt — one per tender used to settle the order. */
+export interface ReceiptTender {
+  method: 'cash' | 'card';
+  amount: number;
+  pan?: string;
+  cardName?: string;
+}
+
 export interface ReceiptData {
   orderNumber?: number | string;
   items: ReceiptItem[];
@@ -20,9 +28,10 @@ export interface ReceiptData {
   discountTotal: number;
   total: number;
   currencyCode: string;
-  paymentMethod: 'cash' | 'card';
-  pan?: string;
-  cardName?: string;
+  /** All tenders used to settle the order, in the order they were taken. Always ≥ 1 entry. */
+  tenders: ReceiptTender[];
+  /** Amount handed back to the customer when cash tendered exceeded the total. */
+  changeDue?: number;
 }
 
 export interface Printer {
