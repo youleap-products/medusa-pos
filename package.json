@@ -15,13 +15,16 @@
   },
   "jest": {
     "preset": "jest-expo",
-    "testMatch": ["**/utils/payment/**/*.test.ts"],
+    "testMatch": [
+      "**/utils/payment/**/*.test.ts"
+    ],
     "transformIgnorePatterns": [
       "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg)"
     ]
   },
   "dependencies": {
     "@expo-google-fonts/noto-sans": "^0.4.0",
+    "@heasy/react-native-sunmi-printer": "^1.8.4",
     "@hookform/resolvers": "^5.1.1",
     "@medusajs/js-sdk": "2.10.2",
     "@medusajs/types": "2.10.2",
