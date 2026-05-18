@@ -31,6 +31,8 @@ import { shortenXfield } from '@/utils/payment/xfield';
 import { hardwareService } from '@/utils/hardware/HardwareService';
 import { formatDate } from '@/utils/date';
 import { useTenders, type Tender, type TenderMethod } from '@/hooks/useTenders';
+import { useShippingOptions } from '@/api/hooks/shipping-options';
+import { BottomSheet } from '@/components/ui/BottomSheet';
 import { AdminDraftOrder, AdminOrderLineItem, AdminPromotion } from '@medusajs/types';
 import { FlashList, ListRenderItem } from '@shopify/flash-list';
 import { router, useLocalSearchParams, usePathname } from 'expo-router';
@@ -43,6 +45,7 @@ type AddTenderState = 'idle' | 'charging' | 'failed';
 interface PaymentError {
   code?: string;
   message?: string;
+  category?: 'card' | 'limit' | 'comm' | 'data' | 'config' | 'device' | 'user' | 'unknown';
 }
 
 // ─── Cart item (left panel) ───────────────────────────────────────────────────
@@ -329,6 +332,23 @@ export default function CheckoutScreen() {
   const [addError, setAddError] = React.useState<PaymentError>({});
   const [chargingAmount, setChargingAmount] = React.useState<number>(0);
 
+  // Shipping option picker — defaults to the first option available at the
+  // configured stock location. Cashier can change it via the bottom sheet.
+  const shippingOptions = useShippingOptions(settings.data?.stock_location?.id);
+  const [shippingOptionId, setShippingOptionId] = React.useState<string | undefined>();
+  const [shippingPickerOpen, setShippingPickerOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!shippingOptionId && shippingOptions.data && shippingOptions.data.length > 0) {
+      setShippingOptionId(shippingOptions.data[0].id);
+    }
+  }, [shippingOptions.data, shippingOptionId]);
+
+  const selectedShippingOption = React.useMemo(
+    () => shippingOptions.data?.find((o) => o.id === shippingOptionId),
+    [shippingOptions.data, shippingOptionId],
+  );
+
   const currencyCode =
     draftOrder.data?.region?.currency_code || settings.data?.region?.currency_code;
 
@@ -420,7 +440,11 @@ export default function CheckoutScreen() {
         });
         setAddState('idle');
       } else {
-        setAddError({ code: result.errorCode, message: result.errorMessage });
+        setAddError({
+          code: result.errorCode,
+          message: result.errorMessage,
+          category: result.errorCategory,
+        });
         setAddState('failed');
       }
     } catch (err: unknown) {
@@ -462,10 +486,10 @@ export default function CheckoutScreen() {
     if (!isSettled) return;
     const tenderPayload = tenders.map(({ id: _id, ...rest }) => rest);
     completeOrder.mutate(
-      { tenders: tenderPayload },
+      { tenders: tenderPayload, shippingOptionId },
       { onSuccess: () => hardwareService.printReceipt(buildReceiptData(tenders)) },
     );
-  }, [isSettled, tenders, completeOrder, buildReceiptData]);
+  }, [isSettled, tenders, shippingOptionId, completeOrder, buildReceiptData]);
 
   const renderItem = React.useCallback<ListRenderItem<AdminOrderLineItem>>(
     ({ item }) => <DraftOrderItem item={item} />,
@@ -602,6 +626,23 @@ export default function CheckoutScreen() {
                 )}
               </View>
 
+              {/* Shipping method picker */}
+              {(shippingOptions.data?.length ?? 0) > 0 && (
+                <Pressable
+                  onPress={() => setShippingPickerOpen(true)}
+                  className="mt-4 flex-row items-center justify-between rounded-xl border border-gray-200 px-4 py-3"
+                  disabled={completeOrder.isPending}
+                >
+                  <View>
+                    <Text className="text-xs text-gray-400">Shipping</Text>
+                    <Text className="text-sm">
+                      {selectedShippingOption?.name ?? 'Select shipping…'}
+                    </Text>
+                  </View>
+                  <ChevronDown size={18} />
+                </Pressable>
+              )}
+
               {/* Grand total + running balance */}
               <View className="mt-3 border-t border-gray-200 pt-3">
                 <View className="flex-row justify-between">
@@ -726,6 +767,34 @@ export default function CheckoutScreen() {
           )}
         </View>
       </View>
+
+      {/* Shipping option picker */}
+      <BottomSheet
+        visible={shippingPickerOpen}
+        onClose={() => setShippingPickerOpen(false)}
+        title="Shipping method"
+      >
+        <View className="gap-2">
+          {(shippingOptions.data ?? []).map((option) => {
+            const isSelected = option.id === shippingOptionId;
+            return (
+              <Pressable
+                key={option.id}
+                onPress={() => {
+                  setShippingOptionId(option.id);
+                  setShippingPickerOpen(false);
+                }}
+                className={`flex-row items-center justify-between rounded-xl border px-4 py-3 ${
+                  isSelected ? 'border-black bg-gray-100' : 'border-gray-200'
+                }`}
+              >
+                <Text className={`text-sm ${isSelected ? 'font-medium' : ''}`}>{option.name}</Text>
+                {isSelected && <Text>✓</Text>}
+              </Pressable>
+            );
+          })}
+        </View>
+      </BottomSheet>
 
       {/* Order confirmed dialog (existing logic) */}
       <Dialog
