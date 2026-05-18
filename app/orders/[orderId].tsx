@@ -1,8 +1,10 @@
 import { DRAFT_ORDER_DEFAULT_CUSTOMER_EMAIL } from '@/api/hooks/draft-orders';
-import { useOrder } from '@/api/hooks/orders';
+import { useFulfillOrder, useOrder, useRefundOrder } from '@/api/hooks/orders';
 import { InfoBanner } from '@/components/InfoBanner';
 import { LoadingBanner } from '@/components/LoadingBanner';
 import { BottomSheet } from '@/components/ui/BottomSheet';
+import { Button } from '@/components/ui/Button';
+import { Dialog } from '@/components/ui/Dialog';
 import { FulfillmentStatus, OrderStatus, PaymentStatus } from '@/components/ui/OrderStatus';
 import { Text } from '@/components/ui/Text';
 import { useSettings } from '@/contexts/settings';
@@ -70,10 +72,244 @@ const CustomerInformation: React.FC<{
   );
 };
 
+type RefundState = 'idle' | 'confirm' | 'processing' | 'success' | 'error';
+
+const RefundSection: React.FC<{ order: AdminOrder; currency: string }> = ({ order, currency }) => {
+  const [refundState, setRefundState] = React.useState<RefundState>('idle');
+  const [errorMessage, setErrorMessage] = React.useState('');
+
+  const refundOrder = useRefundOrder();
+
+  const paidAmount = order.payment_collections?.reduce(
+    (acc, col) => acc + (col.captured_amount ?? 0) - (col.refunded_amount ?? 0),
+    0,
+  ) ?? 0;
+
+  console.log('[RefundSection]', JSON.stringify({
+    payment_status: order.payment_status,
+    paidAmount,
+    caspit_uid: order.metadata?.caspit_uid,
+    collections: order.payment_collections?.map((c) => ({
+      id: c.id,
+      status: c.status,
+      captured_amount: c.captured_amount,
+      refunded_amount: c.refunded_amount,
+    })),
+  }));
+
+  // Only show refund button if there's something to refund
+  const isRefundable = paidAmount > 0 && order.payment_status !== 'refunded';
+  console.log('[RefundSection] isRefundable=', isRefundable);
+  // TEMP: always render to debug visibility
+  // if (!isRefundable) return null;
+
+  const hasUid = !!order.metadata?.caspit_uid;
+  const actionLabel = hasUid ? 'Cancel Transaction' : 'Refund';
+  const actionDescription = hasUid
+    ? 'This will cancel the terminal transaction. No card needed.'
+    : 'The customer must tap their card on the terminal to complete the refund.';
+
+  const handleConfirm = () => {
+    setRefundState('processing');
+    refundOrder.mutate(
+      { order, amount: paidAmount },
+      {
+        onSuccess: () => setRefundState('success'),
+        onError: (err) => {
+          setErrorMessage(err.message ?? 'Refund failed');
+          setRefundState('error');
+        },
+      },
+    );
+  };
+
+  return (
+    <>
+      <View className="mt-4">
+        <Button
+          variant="outline"
+          onPress={() => setRefundState('confirm')}
+          textClassName="text-red-500"
+        >
+          {actionLabel}
+        </Button>
+      </View>
+
+      {/* Confirm dialog */}
+      <Dialog
+        visible={refundState === 'confirm'}
+        title={actionLabel}
+        onClose={() => setRefundState('idle')}
+        dismissOnOverlayPress={false}
+      >
+        <View className="gap-4">
+          <Text className="text-sm text-gray-300">{actionDescription}</Text>
+          <View className="flex-row items-center justify-between">
+            <Text className="text-sm text-gray-300">Amount</Text>
+            <Text className="text-lg">
+              {paidAmount.toLocaleString('en-US', {
+                style: 'currency',
+                currency,
+                currencyDisplay: 'narrowSymbol',
+              })}
+            </Text>
+          </View>
+          <View className="flex-row gap-3">
+            <Button variant="outline" className="flex-1" onPress={() => setRefundState('idle')}>
+              Cancel
+            </Button>
+            <Button className="flex-1" onPress={handleConfirm}>
+              Confirm
+            </Button>
+          </View>
+        </View>
+      </Dialog>
+
+      {/* Processing — blocks UI while terminal is active */}
+      <Dialog
+        visible={refundState === 'processing'}
+        title={hasUid ? 'Cancelling...' : 'Waiting for card...'}
+        showCloseButton={false}
+        dismissOnOverlayPress={false}
+      >
+        <View className="items-center gap-4 py-4">
+          <LoadingBanner variant="ghost">
+            {hasUid ? 'Communicating with terminal' : 'Ask customer to tap card on terminal'}
+          </LoadingBanner>
+        </View>
+      </Dialog>
+
+      {/* Success */}
+      <Dialog
+        visible={refundState === 'success'}
+        title="Done"
+        onClose={() => setRefundState('idle')}
+      >
+        <View className="gap-4">
+          <InfoBanner colorScheme="success">
+            {hasUid ? 'Transaction cancelled successfully.' : 'Refund processed successfully.'}
+          </InfoBanner>
+          <Button onPress={() => setRefundState('idle')}>Close</Button>
+        </View>
+      </Dialog>
+
+      {/* Error */}
+      <Dialog
+        visible={refundState === 'error'}
+        title="Refund Failed"
+        onClose={() => setRefundState('idle')}
+      >
+        <View className="gap-4">
+          <InfoBanner colorScheme="error">{errorMessage}</InfoBanner>
+          <View className="flex-row gap-3">
+            <Button variant="outline" className="flex-1" onPress={() => setRefundState('idle')}>
+              Close
+            </Button>
+            <Button className="flex-1" onPress={() => setRefundState('confirm')}>
+              Try Again
+            </Button>
+          </View>
+        </View>
+      </Dialog>
+    </>
+  );
+};
+
+type FulfillState = 'idle' | 'confirm' | 'processing' | 'success' | 'error';
+
+const FulfillmentSection: React.FC<{ order: AdminOrder }> = ({ order }) => {
+  const [state, setState] = React.useState<FulfillState>('idle');
+  const [errorMessage, setErrorMessage] = React.useState('');
+
+  const fulfillOrder = useFulfillOrder();
+
+  const unfulfilledQty =
+    order.items?.reduce((acc, item) => acc + item.quantity - (item.detail?.fulfilled_quantity ?? 0), 0) ?? 0;
+
+  if (unfulfilledQty === 0) return null;
+
+  const handleConfirm = () => {
+    setState('processing');
+    fulfillOrder.mutate(
+      { order },
+      {
+        onSuccess: () => setState('success'),
+        onError: (err) => {
+          setErrorMessage(err.message ?? 'Fulfillment failed');
+          setState('error');
+        },
+      },
+    );
+  };
+
+  return (
+    <>
+      <View className="mt-4">
+        <Button onPress={() => setState('confirm')}>Mark as Fulfilled</Button>
+      </View>
+
+      <Dialog
+        visible={state === 'confirm'}
+        title="Fulfill Order"
+        onClose={() => setState('idle')}
+        dismissOnOverlayPress={false}
+      >
+        <View className="gap-4">
+          <Text className="text-sm text-gray-300">
+            This will mark all {unfulfilledQty} item{unfulfilledQty !== 1 ? 's' : ''} as fulfilled and shipped. The
+            customer is taking the items now.
+          </Text>
+          <View className="flex-row gap-3">
+            <Button variant="outline" className="flex-1" onPress={() => setState('idle')}>
+              Cancel
+            </Button>
+            <Button className="flex-1" onPress={handleConfirm}>
+              Confirm
+            </Button>
+          </View>
+        </View>
+      </Dialog>
+
+      <Dialog
+        visible={state === 'processing'}
+        title="Processing..."
+        showCloseButton={false}
+        dismissOnOverlayPress={false}
+      >
+        <View className="items-center gap-4 py-4">
+          <LoadingBanner variant="ghost">Creating fulfillment...</LoadingBanner>
+        </View>
+      </Dialog>
+
+      <Dialog visible={state === 'success'} title="Fulfilled" onClose={() => setState('idle')}>
+        <View className="gap-4">
+          <InfoBanner colorScheme="success">Order fulfilled and shipped successfully.</InfoBanner>
+          <Button onPress={() => setState('idle')}>Close</Button>
+        </View>
+      </Dialog>
+
+      <Dialog visible={state === 'error'} title="Fulfillment Failed" onClose={() => setState('idle')}>
+        <View className="gap-4">
+          <InfoBanner colorScheme="error">{errorMessage}</InfoBanner>
+          <View className="flex-row gap-3">
+            <Button variant="outline" className="flex-1" onPress={() => setState('idle')}>
+              Close
+            </Button>
+            <Button className="flex-1" onPress={() => setState('confirm')}>
+              Try Again
+            </Button>
+          </View>
+        </View>
+      </Dialog>
+    </>
+  );
+};
+
 const OrderInformation: React.FC<{
   order: AdminOrder;
   currency: string;
 }> = ({ order, currency }) => {
+  console.log('[OrderInformation] rendered, order.id=', order.id);
   const automaticTaxesOn = !!order.region?.automatic_taxes;
   const shippingTotal = automaticTaxesOn ? order.shipping_total : order.shipping_subtotal;
 
@@ -229,6 +465,8 @@ const OrderInformation: React.FC<{
           </Text>
         </View>
       </View>
+      <FulfillmentSection order={order} />
+      <RefundSection order={order} currency={currency} />
     </>
   );
 };
