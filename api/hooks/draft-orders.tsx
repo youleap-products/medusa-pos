@@ -1,6 +1,6 @@
 import { useMedusaSdk } from '@/contexts/auth';
 import { useSettings } from '@/contexts/settings';
-import { showErrorToast } from '@/utils/errors';
+import { isFetchError, showErrorToast } from '@/utils/errors';
 import {
   AdminAddDraftOrderItems,
   AdminCustomer,
@@ -9,7 +9,7 @@ import {
   AdminUpdateDraftOrderItem,
 } from '@medusajs/types';
 import { useMutation, UseMutationOptions, useQuery, useQueryClient } from '@tanstack/react-query';
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from '@/utils/storage';
 import * as React from 'react';
 
 const DRAFT_ORDER_ID_STORAGE_KEY = 'draft_order_id';
@@ -85,7 +85,7 @@ export const useDraftOrderOrOrder = (draftOrderId: string) => {
       return sdk.admin.draftOrder
         .retrieve(draftOrderId, {
           fields:
-            '+tax_total,+discount_total,+subtotal,+total,+items.variant.options.*,+items.variant.options.option.*,+items.variant.inventory_quantity,+customer.*',
+            '+tax_total,+discount_total,+subtotal,+total,+items.variant.options.*,+items.variant.options.option.*,+items.variant.inventory_quantity,+items.adjustments.*,+customer.*',
         })
         .then((res) => res.draft_order)
         .catch(async () => {
@@ -114,7 +114,7 @@ export const useCurrentDraftOrder = () => {
 
       return sdk.admin.draftOrder.retrieve(draftOrderId, {
         fields:
-          '+tax_total,+discount_total,+subtotal,+total,+items.variant.options.*,+items.variant.options.option.*,+items.variant.inventory_quantity,+customer.*',
+          '+tax_total,+discount_total,+subtotal,+total,+items.variant.options.*,+items.variant.options.option.*,+items.variant.inventory_quantity,+items.adjustments.*,+customer.*',
       });
     },
   });
@@ -182,6 +182,11 @@ export const useAddToDraftOrder = (
       return options?.onSettled?.(...args);
     },
     onError: (error, variables, context) => {
+      if (isFetchError(error)) {
+        console.error('[addItems] FetchError status:', error.status, 'message:', error.message, error);
+      } else {
+        console.error('[addItems] error:', error);
+      }
       showErrorToast(error);
       return options?.onError?.(error, variables, context);
     },
@@ -523,9 +528,15 @@ export const useUpdateDraftOrderCustomer = (
   });
 };
 
+export type CompleteDraftOrderInput = {
+  capturePayment?: boolean;
+  /** 23-digit Caspit Uid from the charge response — saved to order metadata for void/refund later */
+  paymentUid?: string;
+};
+
 export const useCompleteDraftOrder = (
   draftOrderId: string,
-  options?: Omit<UseMutationOptions<void, Error, void, unknown>, 'mutationKey' | 'mutationFn'>,
+  options?: Omit<UseMutationOptions<void, Error, CompleteDraftOrderInput, unknown>, 'mutationKey' | 'mutationFn'>,
 ) => {
   const sdk = useMedusaSdk();
   const queryClient = useQueryClient();
@@ -533,7 +544,7 @@ export const useCompleteDraftOrder = (
 
   return useMutation({
     mutationKey: ['draft-order', draftOrderId, 'complete'],
-    mutationFn: async () => {
+    mutationFn: async ({ capturePayment = false, paymentUid }: CompleteDraftOrderInput = {}) => {
       if (!draftOrderId) {
         throw new Error('Draft order ID is required to complete the order');
       }
@@ -549,7 +560,7 @@ export const useCompleteDraftOrder = (
           (address) => address.is_default_billing || address.id === draft_order.customer?.default_billing_address_id,
         ) || draft_order.customer?.addresses[0];
 
-      await sdk.admin.draftOrder.beginEdit(draftOrderId);
+      console.log('[completeOrder] step: update');
       await sdk.admin.draftOrder.update(draftOrderId, {
         billing_address: billingAddress
           ? {
@@ -578,13 +589,64 @@ export const useCompleteDraftOrder = (
             }
           : undefined,
       });
-      await sdk.admin.draftOrder.confirmEdit(draftOrderId);
 
-      await sdk.admin.draftOrder.convertToOrder(draftOrderId);
+      // Cancel any open edit session left from a previous failed attempt
+      try {
+        await sdk.admin.draftOrder.cancelEdit(draftOrderId);
+        console.log('[completeOrder] cancelEdit done (had open session)');
+      } catch {
+        // No open edit session — expected
+      }
+
+      console.log('[completeOrder] step: convertToOrder');
+      try {
+        await sdk.admin.draftOrder.convertToOrder(draftOrderId);
+        console.log('[completeOrder] convertToOrder done');
+      } catch (e: any) {
+        console.error('[completeOrder] convertToOrder failed', e?.status, JSON.stringify({ msg: e?.message, statusText: e?.statusText, type: e?.type, stack: e?.stack?.substring(0, 300) }));
+        throw e;
+      }
+
+      // Clear immediately after convert — if anything below throws, the ID must not
+      // remain in storage or the next addItems will 500 against a non-draft order.
+      await SecureStore.deleteItemAsync(DRAFT_ORDER_ID_STORAGE_KEY);
+
+      console.log('[completeOrder] capturePayment=', capturePayment, 'paymentUid=', paymentUid);
+      if (capturePayment) {
+        try {
+          // Medusa auto-creates a payment collection on convertToOrder.
+          // Retrieve it rather than creating a second one (which fails with 500).
+          const { order: convertedOrder } = await sdk.admin.order.retrieve(draftOrderId, {
+            fields: '+payment_collections.*',
+          });
+
+          const existingCollection = convertedOrder.payment_collections?.[0];
+          console.log('[completeOrder] existing collection id=', existingCollection?.id, 'status=', existingCollection?.status);
+
+          const collectionId = existingCollection
+            ? existingCollection.id
+            : (await sdk.admin.paymentCollection.create({ order_id: draftOrderId })).payment_collection.id;
+
+          await sdk.admin.paymentCollection.markAsPaid(collectionId, {
+            order_id: draftOrderId,
+          });
+          console.log('[completeOrder] markAsPaid done');
+        } catch (e: any) {
+          console.error('[completeOrder] payment capture failed status=', e?.status, 'message=', e?.message);
+          throw e;
+        }
+      }
+
+      if (paymentUid) {
+        const updated = await sdk.admin.order.update(draftOrderId, {
+          metadata: { caspit_uid: paymentUid },
+        });
+        console.log('[completeOrder] metadata saved, caspit_uid=', updated.order.metadata?.caspit_uid);
+      }
+
       await sdk.client.fetch(`/admin/orders/${draftOrderId}/complete`, {
         method: 'POST',
       });
-      await SecureStore.deleteItemAsync(DRAFT_ORDER_ID_STORAGE_KEY);
     },
     ...options,
     onSettled: async (...args) => {
