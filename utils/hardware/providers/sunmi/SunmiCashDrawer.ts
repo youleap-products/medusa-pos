@@ -34,10 +34,12 @@ const ESC_P_PIN2_MAX_PULSE_BASE64 = 'G3AA//8=';
 export class SunmiCashDrawer implements CashDrawer {
   async open(): Promise<void> {
     const service = getSunmiService();
+    console.log('[SunmiCashDrawer] open called, service=', !!service);
     if (!service) return;
     try {
       service.printerInit();
       service.sendRAWData(ESC_P_PIN2_MAX_PULSE_BASE64);
+      console.log('[SunmiCashDrawer] ESC/POS pulse sent');
     } catch (e) {
       console.warn('[SunmiCashDrawer] open failed:', e);
     }

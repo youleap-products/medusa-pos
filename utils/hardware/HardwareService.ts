@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import { getCashDrawer, getPrinter } from './registry';
+import { isHardwareEnabled } from './settings';
 import type { CashDrawer, HardwareProviderKey, Printer, ReceiptData } from './types';
 
 /**
@@ -32,14 +33,22 @@ class HardwareService {
   }
 
   printReceipt(data: ReceiptData): Promise<void> {
+    if (!isHardwareEnabled('printer')) {
+      console.log('[HardwareService] printReceipt skipped — printer disabled in settings');
+      return Promise.resolve();
+    }
     return this.printer.printReceipt(data);
   }
 
   openCashDrawer(): Promise<void> {
+    const enabled = isHardwareEnabled('cashDrawer');
+    console.log('[HardwareService] openCashDrawer called, enabled=', enabled);
+    if (!enabled) return Promise.resolve();
     return this.cashDrawer.open();
   }
 
   getCashDrawerStatus(): Promise<boolean> | undefined {
+    if (!isHardwareEnabled('cashDrawer')) return undefined;
     return this.cashDrawer.getStatus?.();
   }
 }
