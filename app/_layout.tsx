@@ -6,6 +6,7 @@ import { SplashScreenController } from '@/components/SplashScreenController';
 import { toastConfig } from '@/config/toast';
 import { AuthProvider, useAuthCtx } from '@/contexts/auth';
 import { useSettings } from '@/contexts/settings';
+import { useCaspitConfig } from '@/hooks/useCaspitConfig';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
@@ -34,13 +35,15 @@ const asyncStoragePersister = createAsyncStoragePersister({
 function App() {
   const auth = useAuthCtx();
   const settings = useSettings();
+  const caspitConfig = useCaspitConfig();
 
   const isSetupComplete =
     settings.isSuccess &&
     !!settings.data &&
     !!settings.data.sales_channel &&
     !!settings.data.region &&
-    !!settings.data.stock_location;
+    !!settings.data.stock_location &&
+    !!(caspitConfig.data?.terminalId);
 
   return (
     <Stack>
@@ -94,6 +97,8 @@ function App() {
         <Stack.Screen name="settings/sales-channel" options={{ headerShown: false }} />
 
         <Stack.Screen name="settings/create-sales-channel" options={{ headerShown: false }} />
+
+        <Stack.Screen name="settings/terminal" options={{ headerShown: false }} />
 
         <Stack.Screen name="+not-found" options={{ headerShown: false }} />
       </Stack.Protected>

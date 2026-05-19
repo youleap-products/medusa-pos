@@ -1,9 +1,17 @@
 import type { ChargeParams, RefundParams, VoidParams } from '../../types';
 
-const TERMINAL_ID = process.env.EXPO_PUBLIC_CASPIT_TERMINAL_ID ?? '';
-const TERM_NO = process.env.EXPO_PUBLIC_CASPIT_TERM_NO ?? '001';
 const CURRENCY_NIS = '376';
 const TIMEOUT = '90';
+
+/**
+ * Runtime config the builders need on every call.
+ * Sourced lazily from `caspitStorage` by the adapter, or passed directly
+ * during verify (where we want to test a candidate id without persisting).
+ */
+export interface CaspitWireConfig {
+  terminalId: string;
+  termNo: string; // hard-coded to '001' today; reserved for future multi-lane
+}
 
 /**
  * Generates a unique request ID for each Caspit XML request.
@@ -46,15 +54,16 @@ function tag(name: string, value: string): string {
  * 90-second pinpad timeout, and the caller-supplied command-specific tags.
  *
  * @param command - Caspit command number (e.g. `'001'` for charge, `'012'` for query)
+ * @param config - Runtime terminal identity (Caspit TerminalId + TermNo)
  * @param extraTags - Pre-serialized XML tag strings specific to the transaction type
  */
-function baseRequest(command: string, extraTags: string[]): string {
+function baseRequest(command: string, config: CaspitWireConfig, extraTags: string[]): string {
   return [
     '<Request>',
     tag('Command', command),
     tag('RequestId', requestId()),
-    tag('TerminalId', TERMINAL_ID),
-    tag('TermNo', TERM_NO),
+    tag('TerminalId', config.terminalId),
+    tag('TermNo', config.termNo),
     tag('TimeoutInSeconds', TIMEOUT),
     ...extraTags,
     '</Request>',
@@ -64,12 +73,9 @@ function baseRequest(command: string, extraTags: string[]): string {
 /**
  * Builds the XML for a regular card-present charge (Cmd 001, TranType 1, Mti 100).
  * The cardholder taps/dips/swipes on the pinpad; no card data is passed in JS.
- *
- * @param params.amount - Charge amount in agorot (100 NIS = 10 000)
- * @param params.orderId - Medusa order ID used as Xfield (must be ≤19 chars)
  */
-export function buildChargeXml(params: ChargeParams): string {
-  return baseRequest('001', [
+export function buildChargeXml(params: ChargeParams, config: CaspitWireConfig): string {
+  return baseRequest('001', config, [
     tag('Mti', '100'),
     tag('CreditTerms', '1'),
     tag('TranType', '1'),
@@ -84,12 +90,9 @@ export function buildChargeXml(params: ChargeParams): string {
  * Builds the XML for an independent refund (Cmd 001, TranType 53, Mti 100).
  * The cardholder must present their card again — this is NOT linked to the original
  * transaction and does not require a Uid. Use after the original has been transmitted to Shva.
- *
- * @param params.amount - Refund amount in agorot
- * @param params.xfield - New unique Xfield for this refund transaction (≤19 chars)
  */
-export function buildRefundXml(params: RefundParams): string {
-  return baseRequest('001', [
+export function buildRefundXml(params: RefundParams, config: CaspitWireConfig): string {
+  return baseRequest('001', config, [
     tag('Mti', '100'),
     tag('CreditTerms', '1'),
     tag('TranType', '53'),
@@ -104,15 +107,9 @@ export function buildRefundXml(params: RefundParams): string {
  * Builds the XML to void/cancel a transaction (Cmd 001, Mti 400).
  * Only works on transactions that have NOT yet been transmitted to Shva (end-of-day).
  * Requires the exact `Uid`, `CreditTerms`, `TranType`, and `Amount` from the original charge.
- *
- * @param params.originalUid - 23-digit Uid returned by the original charge response
- * @param params.xfield - NEW unique Xfield for this void (not the original Xfield)
- * @param params.amount - Must equal the original transaction amount
- * @param params.creditTerms - Must equal the original `CreditTerms`
- * @param params.tranType - Must equal the original `TranType`
  */
-export function buildVoidXml(params: VoidParams): string {
-  return baseRequest('001', [
+export function buildVoidXml(params: VoidParams, config: CaspitWireConfig): string {
+  return baseRequest('001', config, [
     tag('Mti', '400'),
     tag('CreditTerms', params.creditTerms),
     tag('TranType', params.tranType),
@@ -127,11 +124,23 @@ export function buildVoidXml(params: VoidParams): string {
  * Builds the XML to query a transaction by its Xfield (Cmd 012).
  * Used as a recovery tool: if the charge call timed out or disconnected, call this
  * to check whether the terminal actually approved the card before retrying.
- *
- * @param xfield - The Xfield (Medusa order ID) used in the original charge
  */
-export function buildQueryXml(xfield: string): string {
-  return baseRequest('012', [
+export function buildQueryXml(xfield: string, config: CaspitWireConfig): string {
+  return baseRequest('012', config, [
     tag('Xfield', xfield),
+  ]);
+}
+
+/**
+ * Builds the XML for a connectivity test (Cmd 003 CommTest).
+ *
+ * Used by `verifyConfig` to probe a candidate Terminal ID before persisting it.
+ * `CheckShva=1` extends the test to verify the pinpad can reach the acquirer
+ * (Shva), so a green check here means the next real charge has a genuine
+ * chance of succeeding — not just that the Caspit app is installed.
+ */
+export function buildCommTestXml(config: CaspitWireConfig): string {
+  return baseRequest('003', config, [
+    tag('CheckShva', '1'),
   ]);
 }

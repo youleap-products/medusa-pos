@@ -1,19 +1,46 @@
 import { NativeModules, Platform } from 'react-native';
-import type { PaymentProvider, ChargeParams, RefundParams, VoidParams, PaymentResult } from '../../types';
-import { buildChargeXml, buildRefundXml, buildVoidXml, buildQueryXml } from './caspit-xml';
+import type {
+  PaymentProvider,
+  ChargeParams,
+  RefundParams,
+  VoidParams,
+  PaymentResult,
+  ProviderConfigSchema,
+  ConfigValues,
+  VerifyResult,
+} from '../../types';
+import {
+  buildChargeXml,
+  buildRefundXml,
+  buildVoidXml,
+  buildQueryXml,
+  buildCommTestXml,
+  type CaspitWireConfig,
+} from './caspit-xml';
 import { parseResponse } from './caspit.parser';
+import { caspitStorage } from '@/utils/storage';
 
 const { IntentBridge } = NativeModules;
 
-const TIMEOUT_MS = 100_000; // slightly over the 90s pinpad timeout
+const TIMEOUT_MS = 100_000;
+const VERIFY_TIMEOUT_MS = 15_000;
 
-/**
- * Guards against calling the terminal on non-Android platforms.
- * The physical Caspit terminal communicates via Android Intents — it literally
- * doesn't exist on iOS or web.
- *
- * @throws `{ code: 'PLATFORM_UNSUPPORTED' }` on non-Android
- */
+export const CASPIT_CONFIG_SCHEMA: ProviderConfigSchema = {
+  fields: [
+    {
+      key: 'terminalId',
+      label: 'Terminal ID (מסוף)',
+      helper: '7-digit merchant number printed on your Caspit terminal',
+      placeholder: '0880381',
+      keyboardType: 'number-pad',
+      validate: (v) => {
+        if (!/^\d{7}$/.test(v)) return 'Must be exactly 7 digits';
+        return null;
+      },
+    },
+  ],
+};
+
 function assertAndroid(): void {
   if (Platform.OS !== 'android') {
     throw Object.assign(new Error('Payment terminal only available on Android'), {
@@ -22,35 +49,26 @@ function assertAndroid(): void {
   }
 }
 
-/**
- * Sends an XML request to the Caspit terminal via the native Android Intent bridge
- * and races it against a JS-side timeout.
- *
- * Two distinct failure paths:
- * - **TIMEOUT** — no response within `TIMEOUT_MS` (100 s). Terminal is unreachable or hung.
- * - **CANCELLED** — Kotlin rejects immediately when the user presses Back on the terminal screen.
- *
- * @param xml - Fully-built Caspit request XML string
- * @returns Raw XML response string from the terminal
- * @throws `{ code: 'TIMEOUT' }` | `{ code: 'CANCELLED' }`
- */
-async function sendWithTimeout(xml: string): Promise<string> {
+async function getCaspitConfig(): Promise<CaspitWireConfig> {
+  const { terminalId } = await caspitStorage.loadConfig();
+  if (!terminalId) {
+    throw Object.assign(new Error('Caspit terminal not configured'), {
+      code: 'CONFIG_MISSING',
+    });
+  }
+  return { terminalId, termNo: '001' };
+}
+
+async function sendWithTimeout(xml: string, timeoutMs = TIMEOUT_MS): Promise<string> {
   const timeout = new Promise<never>((_, reject) =>
     setTimeout(
       () => reject(Object.assign(new Error('Terminal timeout'), { code: 'TIMEOUT' })),
-      TIMEOUT_MS
+      timeoutMs
     )
   );
   return Promise.race([IntentBridge.sendIntent(xml), timeout]);
 }
 
-/**
- * Converts any thrown error into a normalized `PaymentResult` failure object.
- * Ensures every catch block in the adapter returns a consistent shape regardless
- * of whether the error came from a timeout, Android rejection, or platform guard.
- *
- * @param err - Any caught error; `err.code` is forwarded as `errorCode`
- */
 function handleError(err: any): PaymentResult {
   return {
     success: false,
@@ -60,21 +78,11 @@ function handleError(err: any): PaymentResult {
 }
 
 export class CaspitAdapter implements PaymentProvider {
-  /**
-   * Charges a card via the physical terminal.
-   *
-   * Sends **Cmd 001 / TranType 1** (regular card-present purchase).
-   * The cardholder taps/dips/swipes on the Sunmi pinpad.
-   *
-   * @param params.amount - Amount in agorot (100 NIS = 10 000)
-   * @param params.orderId - Medusa order ID used as Xfield (must be ≤19 chars)
-   * @returns `success: true` with `uid` (save for void) on approval;
-   *          `success: false` with `errorCode` on any failure
-   */
   async charge(params: ChargeParams): Promise<PaymentResult> {
     try {
       assertAndroid();
-      const xml = buildChargeXml(params);
+      const config = await getCaspitConfig();
+      const xml = buildChargeXml(params, config);
       console.log('[Caspit] charge params:', JSON.stringify(params));
       console.log('[Caspit] charge XML:', xml);
       const rawXml = await sendWithTimeout(xml);
@@ -88,62 +96,84 @@ export class CaspitAdapter implements PaymentProvider {
     }
   }
 
-  /**
-   * Issues an independent refund via the terminal.
-   *
-   * Sends **Cmd 001 / TranType 53**. The cardholder must present the same card —
-   * this is NOT linked to the original transaction, so no Uid is required.
-   * Use this when the original transaction has already been transmitted to Shva.
-   *
-   * @param params.amount - Refund amount in agorot
-   * @param params.xfield - New unique Xfield for this refund (≤19 chars, not the original)
-   */
   async refund(params: RefundParams): Promise<PaymentResult> {
     try {
       assertAndroid();
-      return parseResponse(await sendWithTimeout(buildRefundXml(params)));
+      const config = await getCaspitConfig();
+      return parseResponse(await sendWithTimeout(buildRefundXml(params, config)));
     } catch (err: any) {
       return handleError(err);
     }
   }
 
-  /**
-   * Voids (cancels) an existing transaction before it's transmitted to Shva.
-   *
-   * Sends **Cmd 001 / Mti 400**. Requires the 23-digit `Uid` from the original
-   * charge response — store it immediately after every successful charge.
-   * Once a transaction has been transmitted to Shva (end-of-day), use `refund` instead.
-   *
-   * @param params.originalUid - 23-digit Uid from the original charge response
-   * @param params.xfield - New unique Xfield for this void (not the original Xfield)
-   * @param params.amount - Must match the original transaction amount
-   * @param params.creditTerms - Must match the original (`CreditTerms` field)
-   * @param params.tranType - Must match the original (`TranType` field)
-   */
   async void(params: VoidParams): Promise<PaymentResult> {
     try {
       assertAndroid();
-      return parseResponse(await sendWithTimeout(buildVoidXml(params)));
+      const config = await getCaspitConfig();
+      return parseResponse(await sendWithTimeout(buildVoidXml(params, config)));
     } catch (err: any) {
       return handleError(err);
     }
   }
 
-  /**
-   * Looks up a previous transaction by its Xfield (Medusa order ID).
-   *
-   * Sends **Cmd 012**. Use this as a recovery mechanism after a network disconnect —
-   * if the charge call throws TIMEOUT but the terminal may have already approved the
-   * card, call `getStatus` to check before retrying.
-   *
-   * @param xfield - The Xfield (order ID) used in the original charge
-   */
   async getStatus(xfield: string): Promise<PaymentResult> {
     try {
       assertAndroid();
-      return parseResponse(await sendWithTimeout(buildQueryXml(xfield)));
+      const config = await getCaspitConfig();
+      return parseResponse(await sendWithTimeout(buildQueryXml(xfield, config)));
     } catch (err: any) {
       return handleError(err);
     }
+  }
+
+  async verifyConfig(candidate: ConfigValues): Promise<VerifyResult> {
+    try {
+      assertAndroid();
+    } catch {
+      return { ok: false, code: 'NOT_INSTALLED', message: 'Not running on Android' };
+    }
+
+    if (!IntentBridge) {
+      return { ok: false, code: 'NOT_INSTALLED', message: 'Caspit app not found on this device' };
+    }
+
+    const config: CaspitWireConfig = { terminalId: candidate.terminalId, termNo: '001' };
+    const xml = buildCommTestXml(config);
+
+    let rawXml: string;
+    try {
+      rawXml = await sendWithTimeout(xml, VERIFY_TIMEOUT_MS);
+    } catch (err: any) {
+      if (err.code === 'TIMEOUT') {
+        return { ok: false, code: 'TIMEOUT', message: 'No response from terminal within 15 seconds' };
+      }
+      if (err.code === 'CANCELLED') {
+        return { ok: false, code: 'UNKNOWN', message: 'Verification cancelled by user' };
+      }
+      return { ok: false, code: 'NOT_INSTALLED', message: err.message ?? 'Failed to reach Caspit app' };
+    }
+
+    // Parse the CommTest response
+    const resultCode = rawXml.match(/<ResultCode>([^<]*)<\/ResultCode>/)?.[1];
+    const checkShvaResult = rawXml.match(/<CheckShvaResult>([^<]*)<\/CheckShvaResult>/)?.[1];
+
+    if (resultCode === '0') {
+      // Terminal ID accepted; check Shva reachability
+      if (checkShvaResult && checkShvaResult !== '0') {
+        return { ok: false, code: 'SHVA_UNREACHABLE', message: 'Terminal reached but acquirer is unreachable' };
+      }
+      return { ok: true };
+    }
+
+    // ResultCode 10003 = wrong terminal ID (per Caspit spec)
+    if (resultCode === '10003') {
+      return { ok: false, code: 'WRONG_TERMINAL_ID', message: 'Terminal rejected this ID — check the 7-digit number' };
+    }
+
+    return {
+      ok: false,
+      code: 'UNKNOWN',
+      message: `Terminal returned ResultCode ${resultCode ?? 'unknown'}`,
+    };
   }
 }
