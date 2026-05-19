@@ -1,6 +1,6 @@
 import { isUnauthorizedError } from '@/utils/errors';
+import { authStorage, draftOrderStorage } from '@/utils/storage';
 import Medusa from '@medusajs/js-sdk';
-import * as SecureStore from '@/utils/storage';
 import * as React from 'react';
 import Toast from 'react-native-toast-message';
 
@@ -77,9 +77,7 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
           Authorization: `Bearer ${apiKey}`,
         });
 
-        await SecureStore.setItemAsync('medusaUrl', medusaUrl);
-        await SecureStore.setItemAsync('userEmail', email);
-        await SecureStore.setItemAsync('apiKey', apiKey);
+        await authStorage.save({ medusaUrl, email, apiKey });
 
         setState({
           status: 'authenticated',
@@ -123,8 +121,8 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
       throw new Error('User is not authenticated');
     }
 
-    await SecureStore.deleteItemAsync('apiKey');
-    await SecureStore.deleteItemAsync('draft_order_id');
+    await authStorage.clearSession();
+    await draftOrderStorage.clear();
     setState({ status: 'unauthenticated' });
   }, [state.status]);
 
@@ -133,9 +131,7 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
 
     const loadAuthState = async () => {
       try {
-        const medusaUrl = await SecureStore.getItemAsync('medusaUrl');
-        const userEmail = await SecureStore.getItemAsync('userEmail');
-        const apiKey = await SecureStore.getItemAsync('apiKey');
+        const { medusaUrl, email: userEmail, apiKey } = await authStorage.load();
 
         if (cancelled) {
           return;
@@ -184,7 +180,7 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
             return;
           }
 
-          await SecureStore.deleteItemAsync('apiKey');
+          await authStorage.clearSession();
 
           setState({
             status: 'unauthenticated',
@@ -197,7 +193,7 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
           return;
         }
 
-        await SecureStore.deleteItemAsync('apiKey');
+        await authStorage.clearSession();
 
         if (isUnauthorizedError(error)) {
           Toast.show({

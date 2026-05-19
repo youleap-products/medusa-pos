@@ -12,6 +12,13 @@ jest.mock('react-native', () => ({
   },
 }));
 
+// Mock storage so the adapter can resolve the terminal config in tests
+jest.mock('@/utils/storage', () => ({
+  caspitStorage: {
+    loadConfig: jest.fn().mockResolvedValue({ terminalId: '0880381', verified: true }),
+  },
+}));
+
 import { NativeModules, Platform } from 'react-native';
 const mockSendIntent = NativeModules.IntentBridge.sendIntent as jest.Mock;
 
@@ -82,10 +89,10 @@ describe('CaspitAdapter.charge', () => {
     const adapter = new CaspitAdapter();
     const chargePromise = adapter.charge({ amount: 10000, orderId: 'order-001' });
 
-    jest.advanceTimersByTime(100_001);
+    // Flush microtasks (getCaspitConfig) then advance clock past the 100 s timeout
+    await jest.runAllTimersAsync();
     const result = await chargePromise;
 
-    jest.clearAllTimers();
     jest.useRealTimers();
 
     expect(result.success).toBe(false);

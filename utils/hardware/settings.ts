@@ -1,4 +1,4 @@
-import * as Storage from '@/utils/storage';
+import { hardwareStorage } from '@/utils/storage';
 
 /**
  * Hardware feature flags — cashier-facing toggles for each connected device.
@@ -23,8 +23,6 @@ export const DEFAULT_HARDWARE_SETTINGS: HardwareSettings = {
   cashDrawer: true,
 };
 
-const STORAGE_KEY = 'hardware_settings_v1';
-
 let current: HardwareSettings = { ...DEFAULT_HARDWARE_SETTINGS };
 let hydrated = false;
 const listeners = new Set<(s: HardwareSettings) => void>();
@@ -34,7 +32,7 @@ const listeners = new Set<(s: HardwareSettings) => void>();
 // for a freshly installed POS.
 void (async () => {
   try {
-    const raw = await Storage.getItemAsync(STORAGE_KEY);
+    const raw = await hardwareStorage.loadRaw();
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<HardwareSettings>;
       current = { ...DEFAULT_HARDWARE_SETTINGS, ...parsed };
@@ -62,7 +60,7 @@ export async function setHardwareSetting<K extends keyof HardwareSettings>(
   current = { ...current, [feature]: value };
   for (const l of listeners) l(current);
   try {
-    await Storage.setItemAsync(STORAGE_KEY, JSON.stringify(current));
+    await hardwareStorage.saveRaw(JSON.stringify(current));
   } catch (e) {
     console.warn('[hardware-settings] persist failed:', e);
   }
