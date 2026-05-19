@@ -9,10 +9,9 @@ import {
   AdminUpdateDraftOrderItem,
 } from '@medusajs/types';
 import { useMutation, UseMutationOptions, useQuery, useQueryClient } from '@tanstack/react-query';
-import * as SecureStore from '@/utils/storage';
+import { draftOrderStorage } from '@/utils/storage';
 import * as React from 'react';
 
-const DRAFT_ORDER_ID_STORAGE_KEY = 'draft_order_id';
 export const DRAFT_ORDER_DEFAULT_CUSTOMER_EMAIL = 'noreply+pos-guest@agilo.com';
 
 const useGetOrSetDefaultCustomer = () => {
@@ -48,7 +47,7 @@ const useGetOrSetDraftOrderId = () => {
   const getOrSetDefaultCustomer = useGetOrSetDefaultCustomer();
 
   return React.useCallback(async () => {
-    const draftOrderId = await SecureStore.getItemAsync(DRAFT_ORDER_ID_STORAGE_KEY);
+    const draftOrderId = await draftOrderStorage.get();
 
     if (draftOrderId) {
       return draftOrderId;
@@ -70,7 +69,7 @@ const useGetOrSetDraftOrderId = () => {
       customer_id: defaultCustomerId,
     });
 
-    await SecureStore.setItemAsync(DRAFT_ORDER_ID_STORAGE_KEY, newDraftOrder.draft_order.id);
+    await draftOrderStorage.set(newDraftOrder.draft_order.id);
 
     return newDraftOrder.draft_order.id;
   }, [getOrSetDefaultCustomer, sdk, settings.data?.region?.id, settings.data?.sales_channel?.id]);
@@ -106,7 +105,7 @@ export const useCurrentDraftOrder = () => {
   return useQuery({
     queryKey: ['draft-order'],
     queryFn: async () => {
-      const draftOrderId = await SecureStore.getItemAsync(DRAFT_ORDER_ID_STORAGE_KEY);
+      const draftOrderId = await draftOrderStorage.get();
 
       if (!draftOrderId) {
         return null;
@@ -127,12 +126,12 @@ export const useCancelDraftOrder = (options?: Omit<UseMutationOptions<void>, 'mu
   return useMutation({
     mutationKey: ['draft-order', 'cancel'],
     mutationFn: async () => {
-      const draftOrderId = await SecureStore.getItemAsync(DRAFT_ORDER_ID_STORAGE_KEY);
+      const draftOrderId = await draftOrderStorage.get();
       if (!draftOrderId) {
         throw new Error('Draft order ID not found');
       }
 
-      await SecureStore.deleteItemAsync(DRAFT_ORDER_ID_STORAGE_KEY);
+      await draftOrderStorage.clear();
       await sdk.admin.draftOrder.delete(draftOrderId);
     },
     ...options,
@@ -636,7 +635,7 @@ export const useCompleteDraftOrder = (
 
       // Clear immediately after convert — if anything below throws, the ID must not
       // remain in storage or the next addItems will 500 against a non-draft order.
-      await SecureStore.deleteItemAsync(DRAFT_ORDER_ID_STORAGE_KEY);
+      await draftOrderStorage.clear();
 
       // Record each tender via the custom POS payments route. The backend
       // orchestrates createPaymentSessions + capturePayment per tender against
